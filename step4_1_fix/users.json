@@ -1,0 +1,19 @@
+{
+  "nextId": 3,
+  "users": [
+    {
+      "id": 1,
+      "username": "UncleOneEye",
+      "email": "michael.v.spina@gmail.com",
+      "passwordHash": "$2a$12$8g/ZkPvNZ54Jduzu1PlC4e3CNyjg8cFuEDuizWJHS2n2Ul8Cayaxu",
+      "createdAt": "2026-02-20T03:09:31.068Z"
+    },
+    {
+      "id": 2,
+      "username": "Johnny",
+      "email": "4chimpshot@gmail.com",
+      "passwordHash": "$2a$12$A37DX1NAnpIzt5svgbrcsOjhJaoos3Qw8cVvk8lgq4KwFRcDudgqe",
+      "createdAt": "2026-02-20T03:09:44.341Z"
+    }
+  ]
+}

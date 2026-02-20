@@ -1,0 +1,17 @@
+{
+  "name": "syracuse-pitch-v10",
+  "private": true,
+  "version": "0.11.9a",
+  "scripts": {
+    "install:all": "npm install --prefix server && npm install --prefix client",
+    "dev:server": "npm run dev --prefix server",
+    "dev:client": "npm run dev --prefix client -- --host 0.0.0.0 --port 5173",
+    "dev": "concurrently -k \"npm run dev:server\" \"npm run dev:client\"",
+    "build": "npm run build --prefix client && npm run build --prefix server",
+    "start": "cross-env NODE_ENV=production npm run start --prefix server"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3"
+  }
+}
