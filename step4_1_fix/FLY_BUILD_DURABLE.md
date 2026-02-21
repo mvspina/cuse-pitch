@@ -107,3 +107,9 @@ Server listening on http://0.0.0.0:3000 (production) NODE_ENV=production PORT=30
 ```
 
 Health checks to `/healthz` should continue to return 200.
+
+---
+
+## Postgres (attach / detach)
+
+For Fly Postgres attach, detach, and fixing the "already contains DATABASE_URL" error, see **[POSTGRES_SETUP.md](./POSTGRES_SETUP.md)**.

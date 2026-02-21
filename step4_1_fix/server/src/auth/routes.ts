@@ -49,7 +49,7 @@ export function buildAuthRouter(): Router {
     })
   })
 
-  r.post('/signup', (req, res) => {
+  r.post('/signup', async (req, res) => {
     const username = normalizeUsername(req.body?.username)
     const email = normalizeEmail(req.body?.email)
     const password = String(req.body?.password ?? '')
@@ -62,21 +62,20 @@ export function buildAuthRouter(): Router {
     const eErr = validateEmail(email)
     if (eErr) return res.status(400).json({ ok: false, error: eErr })
 
-    const existing = getUserByUsername(username)
+    const existing = await getUserByUsername(username)
     if (existing) return res.status(409).json({ ok: false, error: 'Username already taken.' })
 
-    const existingEmail = getUserByEmail(email)
+    const existingEmail = await getUserByEmail(email)
     if (existingEmail) return res.status(409).json({ ok: false, error: 'Email is already in use.' })
 
-    // bcrypt cost factor: 12 for a decent baseline on modern CPUs.
     const passwordHash = bcrypt.hashSync(password, 12)
-    const user = createUser(username, email, passwordHash)
+    const user = await createUser(username, email, passwordHash)
 
     ;(req.session as any).user = { id: user.id, username: user.username } satisfies SessionUser
     return res.json({ ok: true, user: { id: user.id, username: user.username } })
   })
 
-  r.post('/login', (req, res) => {
+  r.post('/login', async (req, res) => {
     const username = normalizeUsername(req.body?.username)
     const password = String(req.body?.password ?? '')
 
@@ -85,7 +84,7 @@ export function buildAuthRouter(): Router {
     const pErr = validatePassword(password)
     if (pErr) return res.status(400).json({ ok: false, error: 'Invalid username or password.' })
 
-    const user = getUserByUsername(username)
+    const user = await getUserByUsername(username)
     if (!user) return res.status(401).json({ ok: false, error: 'Invalid username or password.' })
 
     const ok = bcrypt.compareSync(password, user.passwordHash)
@@ -104,7 +103,7 @@ export function buildAuthRouter(): Router {
     // eslint-disable-next-line no-console
     console.log('[Cuse Pitch] Password reset requested for', email ? `${email.replace(/^(.{2})[\s\S]*@/, '$1***@')}` : '(empty)')
 
-    const user = getUserByEmail(email)
+    const user = await getUserByEmail(email)
     if (!user) return res.json({ ok: true })
 
     try {
@@ -121,7 +120,7 @@ export function buildAuthRouter(): Router {
   })
 
   // Exchange a valid reset token for a new password.
-  r.post('/password-reset/confirm', (req, res) => {
+  r.post('/password-reset/confirm', async (req, res) => {
     const token = String(req.body?.token ?? '').trim()
     const newPassword = String(req.body?.password ?? '')
     const pErr = validatePassword(newPassword)
@@ -129,7 +128,7 @@ export function buildAuthRouter(): Router {
     if (!token) return res.status(400).json({ ok: false, error: 'Reset token is required.' })
 
     const passwordHash = bcrypt.hashSync(newPassword, 12)
-    const ok = consumeResetTokenAndSetPassword(token, passwordHash)
+    const ok = await consumeResetTokenAndSetPassword(token, passwordHash)
     if (!ok) return res.status(400).json({ ok: false, error: 'Reset link is invalid or expired.' })
 
     return res.json({ ok: true })

@@ -1,5 +1,4 @@
-import fs from 'fs'
-import path from 'path'
+import { getPool } from '../db/pool'
 
 export type DbUser = {
   id: number
@@ -14,90 +13,81 @@ export type SessionUser = {
   username: string
 }
 
-type StoreShape = {
-  nextId: number
-  users: DbUser[]
-}
-
-let storePath: string | null = null
-
-function resolveStorePath(): string {
-  if (storePath) return storePath
-  // Persist relative to the server directory (not process.cwd), so running with
-  // different working directories (root vs server) doesn't create a fresh store.
-  const serverRoot = path.resolve(__dirname, '..', '..', '..')
-  const p = process.env.CUSE_PITCH_USERS_PATH
-    ? path.resolve(process.env.CUSE_PITCH_USERS_PATH)
-    : path.join(serverRoot, 'users.json')
-  storePath = p
-  return p
-}
-
-function readStore(): StoreShape {
-  const p = resolveStorePath()
-  if (!fs.existsSync(p)) {
-    const empty: StoreShape = { nextId: 1, users: [] }
-    writeStore(empty)
-    return empty
-  }
-  try {
-    const raw = fs.readFileSync(p, 'utf8')
-    const parsed = JSON.parse(raw) as Partial<StoreShape>
-    const nextId = typeof parsed.nextId === 'number' ? parsed.nextId : 1
-    const users = Array.isArray(parsed.users) ? (parsed.users as DbUser[]) : []
-    return { nextId, users }
-  } catch {
-    const empty: StoreShape = { nextId: 1, users: [] }
-    writeStore(empty)
-    return empty
-  }
-}
-
-function writeStore(store: StoreShape): void {
-  const p = resolveStorePath()
-  const dir = path.dirname(p)
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-  const tmp = `${p}.tmp`
-  fs.writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf8')
-  fs.renameSync(tmp, p)
-}
-
-export function getUserByUsername(username: string): DbUser | null {
+export async function getUserByUsername(username: string): Promise<DbUser | null> {
   const u = (username || '').trim()
   if (!u) return null
-  const store = readStore()
-  const found = store.users.find((x) => x.username === u)
-  return found ?? null
+  const pool = getPool()
+  const res = await pool.query(
+    'SELECT id, username, email, password_hash AS "passwordHash", created_at AS "createdAt" FROM users WHERE username = $1',
+    [u]
+  )
+  const row = res.rows[0]
+  if (!row) return null
+  return {
+    id: Number(row.id),
+    username: row.username,
+    email: row.email ?? '',
+    passwordHash: row.passwordHash,
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
+  }
 }
 
-export function getUserByEmail(email: string): DbUser | null {
+export async function getUserByEmail(email: string): Promise<DbUser | null> {
   const e = (email || '').trim().toLowerCase()
   if (!e) return null
-  const store = readStore()
-  const found = store.users.find((x) => (x.email || '').toLowerCase() === e)
-  return found ?? null
+  const pool = getPool()
+  const res = await pool.query(
+    'SELECT id, username, email, password_hash AS "passwordHash", created_at AS "createdAt" FROM users WHERE LOWER(email) = $1',
+    [e]
+  )
+  const row = res.rows[0]
+  if (!row) return null
+  return {
+    id: Number(row.id),
+    username: row.username,
+    email: row.email ?? '',
+    passwordHash: row.passwordHash,
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
+  }
 }
 
-export function getUserById(id: number): DbUser | null {
-  const store = readStore()
-  const found = store.users.find((x) => x.id === id)
-  return found ?? null
+export async function getUserById(id: number): Promise<DbUser | null> {
+  const pool = getPool()
+  const res = await pool.query(
+    'SELECT id, username, email, password_hash AS "passwordHash", created_at AS "createdAt" FROM users WHERE id = $1',
+    [id]
+  )
+  const row = res.rows[0]
+  if (!row) return null
+  return {
+    id: Number(row.id),
+    username: row.username,
+    email: row.email ?? '',
+    passwordHash: row.passwordHash,
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
+  }
 }
 
-export function createUser(username: string, email: string, passwordHash: string): DbUser {
+export async function createUser(username: string, email: string, passwordHash: string): Promise<DbUser> {
   const u = (username || '').trim()
   const e = (email || '').trim().toLowerCase()
-  const store = readStore()
-  const now = new Date().toISOString()
-  const user: DbUser = {
-    id: store.nextId,
-    username: u,
-    email: e,
-    passwordHash,
-    createdAt: now,
+  const pool = getPool()
+  const res = await pool.query(
+    `INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3)
+     RETURNING id, username, email, password_hash AS "passwordHash", created_at AS "createdAt"`,
+    [u, e || null, passwordHash]
+  )
+  const row = res.rows[0]
+  return {
+    id: Number(row.id),
+    username: row.username,
+    email: row.email ?? '',
+    passwordHash: row.passwordHash,
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
   }
-  store.nextId += 1
-  store.users.push(user)
-  writeStore(store)
-  return user
+}
+
+export async function updateUserPassword(userId: number, passwordHash: string): Promise<void> {
+  const pool = getPool()
+  await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [passwordHash, userId])
 }

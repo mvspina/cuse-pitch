@@ -6,17 +6,11 @@
 app = 'syracuse-pitch'
 primary_region = 'iad'
 
-[mounts]
-source = "data"
-destination = "/data"
-
 [build]
   dockerfile = 'Dockerfile'
 
 [env]
   NODE_ENV = 'production'
-  CUSE_PITCH_STATS_PATH = "/data/stats.json"
-  SESSION_FILE_PATH = "/data/sessions"
 
 [http_service]
   internal_port = 3000
