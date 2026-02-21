@@ -44,12 +44,13 @@ http://localhost:3001
 - Push to GitHub and deploy
 - Railway will run `npm run start` using `railway.json`
 
-### Fly.io
+### Fly.io (Fly Deployment)
 - Install flyctl and run:
 ```bash
 fly launch
 fly deploy
 ```
+- **Why auto-stop is disabled:** The app uses WebSockets for real-time game state. In `fly.toml`, `auto_stop_machines = false` so machines are not stopped when idle; otherwise dropped connections and broken game sessions would occur when a machine spins down and clients reconnect to a different (or newly started) instance.
 
 ## Notes
 - In production, the client connects to the same host at port 3001 automatically.

@@ -395,11 +395,14 @@ export function reducer(state: GameState, action: Action): GameState {
     const startBidder = (state.dealerIndex + 1) % pc
     const dealt = deal7(state)
     const maps = initTeamMaps(state.teams)
+    const newHandNumber = state.handNumber + 1
+    const handId = `h-${newHandNumber}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
 
     let out: GameState = {
       ...state,
       phase: 'BIDDING',
-      handNumber: state.handNumber + 1,
+      handNumber: newHandNumber,
+      handId,
       trump: null,
       bidHistory: [],
       currentBidderIndex: startBidder,

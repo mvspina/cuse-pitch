@@ -213,6 +213,12 @@ function seatStyle(index: number, count: number): React.CSSProperties {
   return pos[count]?.[index] ?? { left: 10, top: 10 }
 }
 
+type RoomStateSnapshot = {
+  roomCode: string
+  hostUserId: string | null
+  players: { userId: string; username: string; seatIndex: number | null; connected: boolean }[]
+}
+
 type NetState = {
   socket: Socket | null
   connected: boolean
@@ -221,6 +227,8 @@ type NetState = {
   playerIndex: number | null
   isHost: boolean
   occupied: boolean[]
+  rematchReady: boolean[]
+  roomState: RoomStateSnapshot | null
   error: string | null
 }
 
@@ -278,7 +286,7 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null)
 
   const [net, setNet] = useState<NetState>({
-    socket: null, connected: false, roomCode: '', token: '', playerIndex: null, isHost: false, occupied: [], rematchReady: [], error: null
+    socket: null, connected: false, roomCode: '', token: '', playerIndex: null, isHost: false, occupied: [], rematchReady: [], roomState: null, error: null
   })
   const [state, setState] = useState<GameState | null>(null)
 
@@ -518,7 +526,7 @@ const prevPlaysLenRef = useRef<number>(0)
 
   useEffect(() => {
     const serverUrl = (import.meta.env.VITE_SOCKET_URL as string | undefined)?.trim() || window.location.origin
-    const s = io(serverUrl, { transports: ['polling','websocket'], withCredentials: true })
+    const s = io(serverUrl, { transports: ['websocket', 'polling'], withCredentials: true })
     setNet(n => ({ ...n, socket: s }))
 
     const attemptReconnect = () => {
@@ -596,6 +604,10 @@ const prevPlaysLenRef = useRef<number>(0)
       if (payload.roomCode) localStorage.setItem(ROOM_KEY, payload.roomCode)
     })
 
+    s.on('room:state', (payload: RoomStateSnapshot) => {
+      setNet(n => ({ ...n, roomState: payload }))
+    })
+
     s.on('roomEnded', (payload: { message?: string }) => {
       // Room was ended by host (or removed). Return to home.
       try {
@@ -603,7 +615,7 @@ const prevPlaysLenRef = useRef<number>(0)
         localStorage.removeItem(TOKEN_KEY)
       } catch {}
       setState(null)
-      setNet(n => ({ ...n, roomCode: null, token: null, playerIndex: null, isHost: false, occupied: [], error: payload?.message ?? 'Room ended' }))
+      setNet(n => ({ ...n, roomCode: null, token: null, playerIndex: null, isHost: false, occupied: [], roomState: null, error: payload?.message ?? 'Room ended' }))
     })
 
 
@@ -615,6 +627,17 @@ const prevPlaysLenRef = useRef<number>(0)
   const dealer = state ? state.players[state.dealerIndex] : null
   const current = state ? state.players[state.currentPlayerIndex] : null
   const bidder = state ? state.players[state.currentBidderIndex] : null
+
+  /** Display name for a seat; prefers room:state snapshot so reconnects don't miss names. */
+  function playerName(seatIndex: number): string {
+    const rs = net.roomState
+    if (rs?.players) {
+      const p = rs.players.find(x => x.seatIndex === seatIndex)
+      if (p?.username) return p.username
+    }
+    const p = state?.players[seatIndex]
+    return p?.name ?? (seatIndex === 0 ? 'Host' : `Player ${seatIndex + 1}`)
+  }
 
   const roomReady = !!(net.roomCode && state)
 
@@ -1094,7 +1117,7 @@ useEffect(() => {
         </div>
         <div className="small" style={{ color: 'rgba(255,255,255,0.92)', marginTop: 6 }}>
           Socket: <strong>{net.connected ? 'Connected' : 'Disconnected'}</strong>
-          {roomReady ? <> | Room: <strong>{net.roomCode}</strong> | You: <strong>{me?.name ?? (net.playerIndex !== null ? `Seat ${net.playerIndex + 1}` : 'Spectator')}</strong></> : null}
+          {roomReady ? <> | Room: <strong>{net.roomCode}</strong> | You: <strong>{net.playerIndex !== null ? playerName(net.playerIndex) : 'Spectator'}</strong></> : null}
           {net.isHost ? <> | <strong>Host</strong></> : null}
         </div>
         {net.error ? (
@@ -1303,11 +1326,11 @@ useEffect(() => {
           <div className="hudBar">
             <div className="hudLeft">
               <div><strong>Phase:</strong> {state.phase}</div>
-              <div><strong>Dealer:</strong> {state.players[state.dealerIndex]?.name ?? '—'}</div>
+              <div><strong>Dealer:</strong> {playerName(state.dealerIndex) ?? '—'}</div>
               <div className={`trumpWrap ${flashTrump ? 'trumpFlash' : ''}`}><strong>Trump:</strong> <span key={trumpRippleTick} className={`trumpIcon ${flashTrump ? 'trumpRipple' : ''}`}>{state.trump ? suitSymbol[state.trump] : '—'}</span></div>
               <div><strong>Target:</strong> {state.settings.targetScore}</div>
-              <div><strong>You:</strong> {me ? me.name : '—'} {net.playerIndex != null ? `(Seat ${net.playerIndex + 1})` : ''}</div>
-              <div><strong>Turn:</strong> {state.players[state.currentPlayerIndex]?.name ?? '—'}</div>
+              <div><strong>You:</strong> {net.playerIndex != null ? playerName(net.playerIndex) : '—'} {net.playerIndex != null ? `(Seat ${net.playerIndex + 1})` : ''}</div>
+              <div><strong>Turn:</strong> {playerName(state.currentPlayerIndex) ?? '—'}</div>
             </div>
 
             <div className="hudScores">
@@ -1366,12 +1389,13 @@ useEffect(() => {
         </div>
 
         <div className="metaPlayers">
-          {state.players.filter(p => p.connected).map((p, idx) => {
+          {state.players.map((p, idx) => {
+            if (!p.connected) return null
             const isTurn = idx === state.currentPlayerIndex && state.phase === 'PLAY'
             const isDealer = idx === state.dealerIndex
             return (
               <span key={p.id} className={`playerPill ${isTurn ? 'turn' : ''} ${isDealer ? 'dealer' : ''}`}>
-                {p.name}{isDealer ? ' D' : ''}
+                {playerName(idx)}{isDealer ? ' D' : ''}
               </span>
             )
           })}
@@ -1427,7 +1451,7 @@ useEffect(() => {
               style={pos[i] ?? {}}
             >
               <div className="seatChipInner">
-                <div className="seatChipName">{(p.name || (i === 0 ? 'Host' : `Player ${i + 1}`))}{i === net.playerIndex ? <span className="youTag"> You</span> : null}</div>
+                <div className="seatChipName">{playerName(i)}{i === net.playerIndex ? <span className="youTag"> You</span> : null}</div>
                 <div className="seatChipMeta">
                   Seat {i + 1}{i === state.dealerIndex ? ' • Dealer' : ''}
                 </div>
@@ -1451,10 +1475,10 @@ useEffect(() => {
 	            ? state?.currentTrick?.leaderIndex ?? null
               : (now < lingerUntil ? lingerLeaderIndex : null)
 
-            if (leader != null && state.players[leader]) return `Led by ${state.players[leader].name}`
+            if (leader != null && state.players[leader]) return `Led by ${playerName(leader)}`
             if (state.phase === 'PLAY') {
               const last = state.trickHistory && state.trickHistory.length ? state.trickHistory[state.trickHistory.length - 1] : null
-              if (last && state.players[last.winnerIndex]) return `Last trick: ${state.players[last.winnerIndex].name}`
+              if (last && state.players[last.winnerIndex]) return `Last trick: ${playerName(last.winnerIndex)}`
               return 'Trick in progress'
             }
             return 'Waiting'
@@ -1486,12 +1510,12 @@ useEffect(() => {
           >
             {show.map(pl => (
               <div key={`${pl.playerIndex}-${cardKey(pl.card)}`} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-                <span className={`cardFace cardEnter ${isRedSuit(pl.card.suit) ? 'red' : 'black'} ${isLinger && lingerWinnerIndex === pl.playerIndex ? 'winnerPulse' : ''}`} title={state.players[pl.playerIndex].name}>
+                <span className={`cardFace cardEnter ${isRedSuit(pl.card.suit) ? 'red' : 'black'} ${isLinger && lingerWinnerIndex === pl.playerIndex ? 'winnerPulse' : ''}`} title={playerName(pl.playerIndex)}>
                   <span className="corner tl"><span className="cardRank">{pl.card.rank}</span><span className={`cardSuit ${isRedSuit(pl.card.suit) ? "redSuit" : ""}`}>{suitSymbol[pl.card.suit]}</span></span>
                   <span className={`pip ${isRedSuit(pl.card.suit) ? "redSuit" : ""}`}>{suitSymbol[pl.card.suit]}</span>
                   <span className="corner br"><span className="cardRank">{pl.card.rank}</span><span className={`cardSuit ${isRedSuit(pl.card.suit) ? "redSuit" : ""}`}>{suitSymbol[pl.card.suit]}</span></span>
                 </span>
-                <div className="small" style={{ color: 'rgba(255,255,255,0.92)' }}>{state.players[pl.playerIndex].name}</div>
+                <div className="small" style={{ color: 'rgba(255,255,255,0.92)' }}>{playerName(pl.playerIndex)}</div>
               </div>
             ))}
           </div>
@@ -1541,14 +1565,14 @@ useEffect(() => {
         state.trickHistory.slice().reverse().map(t => (
           <div key={t.trickNumber} style={{ marginBottom: 10 }}>
             <div className="small" style={{ opacity: 0.92 }}>
-              Trick {t.trickNumber} | Leader: {state.players[t.leaderIndex].name} | Winner: <strong>{state.players[t.winnerIndex].name}</strong>
+              Trick {t.trickNumber} | Leader: {playerName(t.leaderIndex)} | Winner: <strong>{playerName(t.winnerIndex)}</strong>
             </div>
             <div style={{ marginTop: 6 }}>
               {t.plays.map(pl => (
                 <span
                   key={`${t.trickNumber}-${pl.playerIndex}-${cardKey(pl.card)}`}
                   className={`cardFace ${isRedSuit(pl.card.suit) ? 'red' : 'black'} ${pl.playerIndex === t.winnerIndex ? 'winnerGlow' : ''}`}
-                  title={state.players[pl.playerIndex].name}
+                  title={playerName(pl.playerIndex)}
                 >
                   <span className="cardRank">{pl.card.rank}</span>
                   <span className={`cardSuit ${isRedSuit(pl.card.suit) ? "redSuit" : ""}`}>{suitSymbol[pl.card.suit]}</span>
@@ -1577,7 +1601,7 @@ useEffect(() => {
               {state.players.map((p, i) => (
                 <div key={p.id} className="playersRow">
                   <div className="playersRowLeft">
-                    <div style={{ fontWeight: 800 }}>{p.name}</div>
+                    <div style={{ fontWeight: 800 }}>{playerName(i)}</div>
                     <div className="small" style={{ opacity: 0.85 }}>
                       Seat {i + 1}{i === state.dealerIndex ? ' • Dealer' : ''} • {state.teams[p.teamId]?.name ?? ''}
                     </div>
@@ -1600,9 +1624,9 @@ useEffect(() => {
                   <div className="small">
                     {net.error ? (<div className="errorBox" data-testid="BidErrorBanner" style={{ marginBottom: 8 }}>{net.error}</div>) : null}
 
-                  Bidder: <strong>{bidder?.name}</strong><br />
+                  Bidder: <strong>{state.currentBidderIndex != null ? playerName(state.currentBidderIndex) : '—'}</strong><br />
                     Current high bid: <strong>{currentHigh ? String(currentHigh) : 'None'}</strong><br />
-                    You are: <strong>{me?.name ?? 'Spectator'}</strong>
+                    You are: <strong>{net.playerIndex != null ? playerName(net.playerIndex) : 'Spectator'}</strong>
                   </div>
 
                   <hr />
@@ -1746,7 +1770,7 @@ useEffect(() => {
                     <br />
                     <span className="small" style={{ opacity: 0.8 }}>Debug: keep {net.playerIndex !== null ? state.hands7[net.playerIndex].length : 0} | dealt {net.playerIndex !== null ? state.dealtHands7[net.playerIndex].length : 0}</span>.
       <br />
-      Current confirmer: <strong>{state.players[state.currentPlayerIndex].name}</strong>
+      Current confirmer: <strong>{playerName(state.currentPlayerIndex)}</strong>
     </div>
 
     <hr />
@@ -1770,7 +1794,7 @@ useEffect(() => {
     </div>
 
     <p className="small" style={{ marginTop: 10 }}>
-      Confirmed: {state.discardDone.map((d, i) => `${state.players[i].name}: ${d ? 'Yes' : 'No'}`).join(' | ')}
+      Confirmed: {state.discardDone.map((d, i) => `${playerName(i)}: ${d ? 'Yes' : 'No'}`).join(' | ')}
     </p>
 
     <hr />
@@ -1833,7 +1857,7 @@ useEffect(() => {
     <div className="small">
       Trick <strong>{state.trickNumber}</strong> | Trump: <strong>{state.trump ? suitLabel[state.trump] : 'None'}</strong>
       <br />
-      Current turn: <strong>{state.players[state.currentPlayerIndex].name}</strong>
+      Current turn: <strong>{playerName(state.currentPlayerIndex)}</strong>
     </div>
 
     <hr />

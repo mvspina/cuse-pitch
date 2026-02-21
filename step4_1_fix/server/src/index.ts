@@ -15,7 +15,7 @@ import { buildAuthRouter } from './auth/routes'
 import { getUserById } from './auth/db'
 import type { SessionUser } from './auth/db'
 
-import { getStats, upsertAddGame } from './stats/store'
+import { getStats, upsertAddGame, computeBidRate } from './stats/store'
 
 type Room = {
   code: string
@@ -35,6 +35,8 @@ type Room = {
   tokenBySocketId: Map<string, string>     // socketId -> token
 
   hostToken: string
+  /** Stable host identity; used for host-only auth after socket reconnects. */
+  hostUserId: string | null
   rematchReady: Set<number>
 }
 
@@ -48,10 +50,34 @@ type StatePayload = {
   rematchReady: boolean[]
 }
 
+/** Authoritative room snapshot for clients; stable identity (userId) and connected state. */
+type RoomStateSnapshot = {
+  roomCode: string
+  hostUserId: string | null
+  players: { userId: string; username: string; seatIndex: number | null; connected: boolean }[]
+}
+
 const app = express()
 
-// Allow cookie based sessions from the browser client.
-app.use(cors({ origin: true, credentials: true }))
+// Trust proxy first so secure cookies and X-Forwarded-* work behind Fly.io.
+app.set('trust proxy', 1)
+
+const ALLOWED_ORIGINS = new Set([
+  'https://syracuse-pitch.fly.dev',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:3000',
+])
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, cb) => {
+    if (!origin || ALLOWED_ORIGINS.has(origin)) return cb(null, true)
+    if (process.env.NODE_ENV !== 'production') return cb(null, true)
+    return cb(null, false)
+  },
+  credentials: true,
+}
+app.use(cors(corsOptions))
 
 // Basic hardening. Keeps defaults conservative.
 app.use(helmet({
@@ -73,25 +99,32 @@ if (process.env.NODE_ENV !== 'production') {
   })
 }
 
-app.set('trust proxy', 1)
-
 // session-file-store is CommonJS; require keeps it compatible with tsx/tsconfig.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const FileStore = require('session-file-store')(session)
+const isProduction = process.env.NODE_ENV === 'production'
+const sessionStorePath = process.env.SESSION_FILE_PATH
+  ?? (isProduction ? '/data/sessions' : path.join(__dirname, '..', '..', '.sessions'))
+if (isProduction && sessionStorePath.startsWith('/data')) {
+  try {
+    fs.mkdirSync(sessionStorePath, { recursive: true })
+  } catch (e) {
+    console.warn('[SESSION] could not create session dir:', (e as Error)?.message)
+  }
+}
 const sessionMiddleware = session({
   name: 'cuse_pitch_sid',
   secret: process.env.SESSION_SECRET || 'cuse_pitch_dev_secret',
   resave: false,
   saveUninitialized: false,
-  // Persist sessions to disk so users stay logged in across server restarts.
   store: new FileStore({
-    path: path.join(__dirname, '..', '..', '.sessions'),
+    path: sessionStorePath,
     retries: 0,
     logFn: () => {},
   }),
   cookie: {
     httpOnly: true,
-    secure: 'auto',
+    secure: isProduction,
     sameSite: 'lax',
     maxAge: 1000 * 60 * 60 * 24 * 30,
   },
@@ -115,17 +148,20 @@ app.get('/api/stats/me', (req, res) => {
     res.status(401).json({ ok: false, error: 'Not logged in' })
     return
   }
-
+  console.log('[STATS] profile stats requested userId=%s', user.id)
   const stats = getStats(user.id)
   const gamesPlayed = stats?.gamesPlayed ?? 0
   const wins = stats?.wins ?? 0
   const losses = stats?.losses ?? 0
-  const bidsWon = stats?.bidsWon ?? 0
+  const bidsAttempted = stats?.bidsAttempted ?? Math.max(stats?.bidsMade ?? 0, stats?.bidsWon ?? 0)
   const bidsMade = stats?.bidsMade ?? 0
   const stmSuccess = stats?.stmSuccess ?? 0
 
-  const winPct = gamesPlayed > 0 ? wins / gamesPlayed : 0
-  const bidWinPct = bidsMade > 0 ? bidsWon / bidsMade : 0
+  const winPct = gamesPlayed > 0 ? Math.min(1, Math.max(0, wins / gamesPlayed)) : 0
+  const bidWinPct = computeBidRate(bidsAttempted, bidsMade)
+  if (process.env.NODE_ENV !== 'production' && (bidWinPct > 1 || Number.isNaN(bidWinPct))) {
+    throw new Error(`invariant: bidWinPct must be in [0,1], got ${bidWinPct}`)
+  }
 
   res.json({
     ok: true,
@@ -135,11 +171,13 @@ app.get('/api/stats/me', (req, res) => {
       wins,
       losses,
       winPct,
-      bidsWon,
+      bidsAttempted,
       bidsMade,
       bidWinPct,
       stmSuccess,
       updatedAt: stats?.updatedAt ?? null,
+      /** @deprecated Use bidsAttempted. Kept for client compat. */
+      bidsWon: bidsAttempted,
     },
   })
 })
@@ -153,22 +191,36 @@ if (process.env.NODE_ENV === 'production' && hasClientBuild) {
 
 const httpServer = http.createServer(app)
 const io = new Server(httpServer, {
-  cors: { origin: true, credentials: true },
+  cors: {
+    origin: (origin, cb) => {
+      if (!origin || ALLOWED_ORIGINS.has(origin)) return cb(null, true)
+      if (process.env.NODE_ENV !== 'production') return cb(null, true)
+      return cb(null, false)
+    },
+    credentials: true,
+  },
   transports: ['websocket', 'polling'],
-  // Mobile browsers can pause background tabs and miss heartbeats; a slightly longer timeout
-  // reduces false disconnects and improves reconnect stability.
   pingInterval: 25000,
   pingTimeout: 45000,
 })
 
-// Share Express session with Socket.IO.
+// Share Express session with Socket.IO so handshake has req.session.
 const wrap = (mw: any) => (socket: any, next: any) => mw(socket.request, {} as any, next)
 io.use(wrap(sessionMiddleware))
 io.use((socket, next) => {
   const user = (socket.request as any)?.session?.user as SessionUser | undefined
   ;(socket.data as any).user = user || null
+  if (!user?.id) {
+    console.log('[WS] handshake socketId=%s no session (anonymous)', socket.id)
+  }
   next()
 })
+
+/** Returns stable user id from socket auth/session, or null if not logged in. */
+function getSocketUserId(socket: any): string | null {
+  const user = (socket?.data as any)?.user as SessionUser | undefined
+  return user?.id != null ? String(user.id) : null
+}
 
 const rooms = new Map<string, Room>()
 
@@ -239,6 +291,7 @@ function makeRoom(settings: GameSettings, hostName: string, hostUserId?: string)
     socketsByToken: new Map(),
     tokenBySocketId: new Map(),
     hostToken,
+    hostUserId: hostUserId ?? null,
     rematchReady: new Set(),
   }
 
@@ -251,6 +304,13 @@ function makeRoom(settings: GameSettings, hostName: string, hostUserId?: string)
   }
 
   return room
+}
+
+/** True if this token (or its userId) is the room host. Resilient to reconnect. */
+function isHost(room: Room, token: string): boolean {
+  if (token === room.hostToken) return true
+  if (room.hostUserId != null && room.tokenUserId.get(token) === room.hostUserId) return true
+  return false
 }
 
 function occupiedArray(room: Room): boolean[] {
@@ -297,7 +357,7 @@ function emitToToken(room: Room, token: string): void {
     roomCode: room.code,
     token,
     playerIndex: pi,
-    isHost: token === room.hostToken,
+    isHost: isHost(room, token),
     occupied: occupiedArray(room),
     state: masked,
     rematchReady: (() => {
@@ -316,8 +376,27 @@ function emitToToken(room: Room, token: string): void {
   }
 }
 
+function buildRoomStateSnapshot(room: Room): RoomStateSnapshot {
+  const pc = room.state.players.length
+  const players: RoomStateSnapshot['players'] = []
+  for (let seat = 0; seat < pc; seat++) {
+    const userId = room.seatUserId.get(seat)
+    if (userId == null) continue
+    const token = room.seatToken.get(seat)
+    const connected = !!(token && room.socketsByToken.get(token)?.size)
+    players.push({
+      userId: String(userId),
+      username: room.state.players[seat]?.name ?? (seat === 0 ? 'Host' : `Player ${seat + 1}`),
+      seatIndex: seat,
+      connected,
+    })
+  }
+  return { roomCode: room.code, hostUserId: room.hostUserId, players }
+}
+
 function emitRoomState(room: Room): void {
   for (const token of room.socketsByToken.keys()) emitToToken(room, token)
+  io.to(room.code).emit('room:state', buildRoomStateSnapshot(room))
 }
 
 function attachSocketToToken(room: Room, socketId: string, token: string): void {
@@ -359,8 +438,7 @@ function takeSeat(room: Room, token: string, seat: number): { ok: boolean, error
 function leaveSeat(room: Room, token: string): void {
   const seat = room.tokenSeat.get(token)
   if (seat === undefined) return
-  // host cannot leave seat 0
-  if (token === room.hostToken) return
+  if (isHost(room, token)) return
   room.seatToken.delete(seat)
       room.rematchReady.delete(seat)
   room.tokenSeat.delete(token)
@@ -374,7 +452,10 @@ function isAuthorized(room: Room, token: string, action: Action): boolean {
   if (action.type === 'SET_NAME') return action.playerIndex === pi && room.state.phase === 'SETUP'
   if (action.type === 'SET_PLAYERCOUNT' || action.type === 'SET_TARGET' || action.type === 'NEW_GAME') return false
 
-  if (action.type === 'START_HAND') return room.state.phase === 'SETUP' && pi === room.state.dealerIndex
+  if (action.type === 'START_HAND') {
+    const ok = room.state.phase === 'SETUP' && pi === room.state.dealerIndex
+    return ok
+  }
   if (action.type === 'PLACE_BID') return room.state.phase === 'BIDDING' && pi === room.state.currentBidderIndex
   if (action.type === 'TAKE_OUT') return room.state.phase === 'BIDDING' && pi === room.state.currentBidderIndex
   if (action.type === 'MULLIGAN_7') return room.state.phase === 'BIDDING' && pi === action.playerIndex
@@ -389,6 +470,11 @@ function isAuthorized(room: Room, token: string, action: Action): boolean {
 }
 
 io.on('connection', (socket) => {
+  const uid = getSocketUserId(socket)
+  console.log('[WS] connect socketId=%s userId=%s', socket.id, uid ?? 'anonymous')
+  if (!uid) {
+    console.log('[WS] socket anonymous - stats will not be persisted for this connection; user must log in via HTTP first')
+  }
   const getAuthed = () => (((socket.request as any)?.session?.user as SessionUser | undefined) || null)
   socket.on('createRoom', (payload: { settings: GameSettings, name: string, token?: string }, cb?: (resp: any) => void) => {
     try {
@@ -400,6 +486,7 @@ io.on('connection', (socket) => {
 
       attachSocketToToken(room, socket.id, room.hostToken)
       socket.join(room.code)
+      if (authedId) console.log('[ROOM] assign host room=%s hostUserId=%s', room.code, authedId)
 
       emitRoomState(room)
       cb?.({ ok: true, roomCode: room.code, token: room.hostToken, playerIndex: 0, isHost: true })
@@ -418,8 +505,29 @@ io.on('connection', (socket) => {
     const authed = (socket.data as any).user as SessionUser | null
     const authedId = authed?.id != null ? String(authed.id) : undefined
 
-    // If the user is logged in and already owns a seat in this room, prefer that seat's token.
-    if (authedId) {
+    // Reconnect path: if this user is the host (by userId), always assign hostToken and seat 0 so host auth survives reconnect.
+    if (authedId && room.hostUserId != null && authedId === room.hostUserId) {
+      token = room.hostToken
+      room.tokenUserId.set(token, authedId)
+      const at0 = room.seatToken.get(0)
+      if (at0 !== token) {
+        if (at0) {
+          room.seatToken.delete(0)
+          room.tokenSeat.delete(at0)
+          room.seatUserId.delete(0)
+          const sids = room.socketsByToken.get(at0)
+          if (sids) {
+            for (const sid of sids) room.tokenBySocketId.delete(sid)
+            room.socketsByToken.delete(at0)
+          }
+        }
+        room.seatToken.set(0, token)
+        room.tokenSeat.set(token, 0)
+        room.seatUserId.set(0, authedId)
+      }
+      console.log('[ROOM] join room=%s host reconnected userId=%s', code, authedId)
+    } else if (authedId) {
+      // If the user is logged in and already owns a seat in this room, prefer that seat's token.
       for (const [s, uid] of room.seatUserId.entries()) {
         if (uid === authedId) {
           const existing = room.seatToken.get(s)
@@ -429,6 +537,7 @@ io.on('connection', (socket) => {
       }
       room.tokenUserId.set(token, authedId)
     }
+    if (!room.hostUserId && authedId) room.hostUserId = authedId
 
     attachSocketToToken(room, socket.id, token)
     socket.join(code)
@@ -437,15 +546,17 @@ io.on('connection', (socket) => {
     let seat = playerIndexForToken(room, token)
 
     // If no seat, keep as spectator (seat null). User can take a seat in lobby.
-    // But if seat 0 is open and no one else is host, do not allow grabbing host seat.
     if (seat === null && !payload.spectate) {
-      // optionally auto assign first open non-host seat
       const pc = room.state.players.length
       for (let i = 0; i < pc; i++) {
         if (i === 0) continue
         if (!room.seatToken.has(i)) { takeSeat(room, token, i); seat = i; break }
       }
-      if (seat !== null && authedId) room.seatUserId.set(seat, authedId)
+    }
+    // Always bind seat -> userId when seated and authenticated (join or reconnect with token that had a seat).
+    if (seat !== null && authedId) {
+      room.seatUserId.set(seat, authedId)
+      room.tokenUserId.set(token, authedId)
     }
 
     // Set name only if seated and setup
@@ -454,18 +565,20 @@ io.on('connection', (socket) => {
       room.state = reducer(room.state, { type: 'SET_NAME', playerIndex: seat, name: chosenName })
     }
 
+    console.log('[ROOM] join room=%s token=%s seat=%s userId=%s isHost=%s', code, token.slice(0, 8) + '…', seat, authedId ?? 'anonymous', isHost(room, token))
     emitRoomState(room)
-    cb?.({ ok: true, roomCode: code, token, playerIndex: seat, isHost: token === room.hostToken })
+    cb?.({ ok: true, roomCode: code, token, playerIndex: seat, isHost: isHost(room, token) })
   })
 
   socket.on('createInvite', (payload: { roomCode: string, token: string }, cb?: (resp: any) => void) => {
     const code = (payload.roomCode || '').toUpperCase().trim()
     const room = rooms.get(code)
     if (!room) { cb?.({ ok: false, error: 'Room not found' }); return }
-    const authed = (socket.data as any).user as SessionUser | null
-    const authedId = authed?.id != null ? String(authed.id) : undefined
-    const hostUserId = room.seatUserId.get(0) ?? null
-    if (payload.token !== room.hostToken && (!authedId || authedId !== hostUserId)) { cb?.({ ok: false, error: 'Host only' }); return }
+    if (!isHost(room, payload.token)) {
+      const userId = getSocketUserId(socket) ?? room.tokenUserId.get(payload.token) ?? null
+      console.log('[ROOM] host-only denied createInvite room=%s userId=%s hostUserId=%s', code, userId, room.hostUserId)
+      cb?.({ ok: false, error: 'Host only' }); return
+    }
 
     const inv = addInvite(code)
     cb?.({ ok: true, inviteCode: inv.code, roomCode: code })
@@ -486,15 +599,33 @@ io.on('connection', (socket) => {
       return
     }
 
-    // Delegate to joinRoom behavior, but without requiring the client to know the room code.
-    // This preserves existing networking contracts and seat assignment behavior.
     const code = inv.roomCode
     let token = genToken()
     const authed = getAuthed()
     const authedId = authed?.id != null ? String(authed.id) : undefined
 
-    // If the user is logged in and already owns a seat in this room, prefer that seat's token.
-    if (authedId) {
+    // Host reconnect: if this user is the host by userId, assign hostToken and seat 0.
+    if (authedId && room.hostUserId != null && authedId === room.hostUserId) {
+      token = room.hostToken
+      room.tokenUserId.set(token, authedId)
+      const at0 = room.seatToken.get(0)
+      if (at0 !== token) {
+        if (at0) {
+          room.seatToken.delete(0)
+          room.tokenSeat.delete(at0)
+          room.seatUserId.delete(0)
+          const sids = room.socketsByToken.get(at0)
+          if (sids) {
+            for (const sid of sids) room.tokenBySocketId.delete(sid)
+            room.socketsByToken.delete(at0)
+          }
+        }
+        room.seatToken.set(0, token)
+        room.tokenSeat.set(token, 0)
+        room.seatUserId.set(0, authedId)
+      }
+      console.log('[ROOM] join room=%s (invite) host reconnected userId=%s', code, authedId)
+    } else if (authedId) {
       for (const [s, uid] of room.seatUserId.entries()) {
         if (uid === authedId) {
           const existing = room.seatToken.get(s)
@@ -504,6 +635,7 @@ io.on('connection', (socket) => {
       }
       room.tokenUserId.set(token, authedId)
     }
+    if (!room.hostUserId && authedId) room.hostUserId = authedId
 
     attachSocketToToken(room, socket.id, token)
     socket.join(code)
@@ -515,7 +647,10 @@ io.on('connection', (socket) => {
         if (i === 0) continue
         if (!room.seatToken.has(i)) { takeSeat(room, token, i); seat = i; break }
       }
-      if (seat !== null && authedId) room.seatUserId.set(seat, authedId)
+    }
+    if (seat !== null && authedId) {
+      room.seatUserId.set(seat, authedId)
+      room.tokenUserId.set(token, authedId)
     }
 
     if (seat !== null && room.state.phase === 'SETUP') {
@@ -523,8 +658,9 @@ io.on('connection', (socket) => {
       room.state = reducer(room.state, { type: 'SET_NAME', playerIndex: seat, name: chosenName })
     }
 
+    console.log('[ROOM] join (invite) room=%s token=%s seat=%s userId=%s isHost=%s', code, token.slice(0, 8) + '…', seat, authedId ?? 'anonymous', isHost(room, token))
     emitRoomState(room)
-    cb?.({ ok: true, roomCode: code, token, playerIndex: seat, isHost: token === room.hostToken })
+    cb?.({ ok: true, roomCode: code, token, playerIndex: seat, isHost: isHost(room, token) })
   })
 
   socket.on('reconnectRoom', (payload: { roomCode: string, token: string }, cb?: (resp: any) => void) => {
@@ -544,9 +680,15 @@ io.on('connection', (socket) => {
 
     attachSocketToToken(room, socket.id, token)
     socket.join(code)
+    const seat = playerIndexForToken(room, token)
+    if (seat !== null && authedId) {
+      room.seatUserId.set(seat, authedId)
+      room.tokenUserId.set(token, authedId)
+    }
+    console.log('[ROOM] reconnect room=%s token=%s seat=%s userId=%s isHost=%s', code, token.slice(0, 8) + '…', seat, authedId ?? 'anonymous', isHost(room, token))
     emitRoomState(room)
 
-    cb?.({ ok: true, roomCode: code, token, playerIndex: playerIndexForToken(room, token), isHost: token === room.hostToken })
+    cb?.({ ok: true, roomCode: code, token, playerIndex: playerIndexForToken(room, token), isHost: isHost(room, token) })
   })
 
   // Step 2: if the player is logged in, allow reconnecting a seat using the cookie session
@@ -579,9 +721,10 @@ io.on('connection', (socket) => {
     }
 
     socket.join(code)
+    console.log('[ROOM] reconnect (session) room=%s userId=%s seat=%s isHost=%s', code, authedId, seat, isHost(room, token))
     emitRoomState(room)
 
-    cb?.({ ok: true, roomCode: code, token, playerIndex: seat, isHost: token === room.hostToken })
+    cb?.({ ok: true, roomCode: code, token, playerIndex: seat, isHost: isHost(room, token) })
   })
 
   socket.on('takeSeat', (payload: { roomCode: string, token: string, seat: number, name?: string }, cb?: (resp: any) => void) => {
@@ -590,8 +733,7 @@ io.on('connection', (socket) => {
     if (!room) { cb?.({ ok: false, error: 'Room not found' }); return }
     if (room.state.phase !== 'SETUP') { cb?.({ ok: false, error: 'Seats can only be changed in Setup' }); return }
 
-    // host token only can take seat 0
-    if (payload.seat === 0 && payload.token !== room.hostToken) { cb?.({ ok: false, error: 'Seat 1 is host only' }); return }
+    if (payload.seat === 0 && !isHost(room, payload.token)) { cb?.({ ok: false, error: 'Seat 1 is host only' }); return }
 
     const res = takeSeat(room, payload.token, payload.seat)
     if (!res.ok) { cb?.(res); return }
@@ -601,6 +743,7 @@ io.on('connection', (socket) => {
     if (authedId) {
       room.seatUserId.set(payload.seat, authedId)
       room.tokenUserId.set(payload.token, authedId)
+      console.log('[ROOM] seat assignment room=%s seat=%s userId=%s', code, payload.seat, authedId)
     }
     const chosenName = (authed?.username || payload.name || '').trim()
     if (chosenName.length > 0) {
@@ -626,7 +769,10 @@ io.on('connection', (socket) => {
     const code = (payload.roomCode || '').toUpperCase().trim()
     const room = rooms.get(code)
     if (!room) { cb?.({ ok: false, error: 'Room not found' }); return }
-    if (payload.token !== room.hostToken) { cb?.({ ok: false, error: 'Host only' }); return }
+    if (!isHost(room, payload.token)) {
+      console.log('[ROOM] host-only denied hostKick room=%s userId=%s hostUserId=%s', code, getSocketUserId(socket) ?? room.tokenUserId.get(payload.token), room.hostUserId)
+      cb?.({ ok: false, error: 'Host only' }); return
+    }
     if (room.state.phase !== 'SETUP') { cb?.({ ok: false, error: 'Kick only in Setup' }); return }
     if (payload.seat === 0) { cb?.({ ok: false, error: 'Cannot kick host' }); return }
 
@@ -687,7 +833,10 @@ io.on('connection', (socket) => {
     const code = (payload.roomCode || '').toUpperCase().trim()
     const room = rooms.get(code)
     if (!room) { cb?.({ ok: false, error: 'Room not found' }); return }
-    if (payload.token !== room.hostToken) { cb?.({ ok: false, error: 'Host only' }); return }
+    if (!isHost(room, payload.token)) {
+      console.log('[ROOM] host-only denied hostReset room=%s userId=%s hostUserId=%s', code, getSocketUserId(socket) ?? room.tokenUserId.get(payload.token), room.hostUserId)
+      cb?.({ ok: false, error: 'Host only' }); return
+    }
 
     // preserve names for occupied seats
     const names: string[] = room.state.players.map(p => p.name)
@@ -708,7 +857,10 @@ io.on('connection', (socket) => {
     const code = (payload.roomCode || '').toUpperCase().trim()
     const room = rooms.get(code)
     if (!room) { cb?.({ ok: false, error: 'Room not found' }); return }
-    if (payload.token !== room.hostToken) { cb?.({ ok: false, error: 'Host only' }); return }
+    if (!isHost(room, payload.token)) {
+      console.log('[ROOM] host-only denied hostEndRoom room=%s userId=%s hostUserId=%s', code, getSocketUserId(socket) ?? room.tokenUserId.get(payload.token), room.hostUserId)
+      cb?.({ ok: false, error: 'Host only' }); return
+    }
 
     // Notify all connected clients, then delete the room
     const message = 'Host ended the room'
@@ -730,7 +882,10 @@ io.on('connection', (socket) => {
     const code = (payload.roomCode || '').toUpperCase().trim()
     const room = rooms.get(code)
     if (!room) { cb?.({ ok: false, error: 'Room not found' }); return }
-    if (payload.token !== room.hostToken) { cb?.({ ok: false, error: 'Host only' }); return }
+    if (!isHost(room, payload.token)) {
+      console.log('[ROOM] host-only denied hostUpdateSettings room=%s userId=%s hostUserId=%s', code, getSocketUserId(socket) ?? room.tokenUserId.get(payload.token), room.hostUserId)
+      cb?.({ ok: false, error: 'Host only' }); return
+    }
     if (room.state.phase !== 'SETUP') { cb?.({ ok: false, error: 'Settings only in Setup' }); return }
 
     room.settings = payload.settings
@@ -771,19 +926,42 @@ io.on('connection', (socket) => {
     if (!room) { cb?.({ ok: false, error: 'Room not found' }); return }
 
     if (!payload.token) { cb?.({ ok: false, error: 'Missing token' }); return }
-    if (!isAuthorized(room, payload.token, payload.action)) { cb?.({ ok: false, error: 'Not authorized for that action right now' }); return }
+    if (!isAuthorized(room, payload.token, payload.action)) {
+      if (payload.action.type === 'START_HAND') {
+        const pi = playerIndexForToken(room, payload.token)
+        console.log('[ROOM] action denied START_HAND room=%s userId=%s hostUserId=%s playerIndex=%s dealerIndex=%s phase=%s',
+          code, getSocketUserId(socket) ?? room.tokenUserId.get(payload.token), room.hostUserId, pi, room.state.dealerIndex, room.state.phase)
+      }
+      cb?.({ ok: false, error: 'Not authorized for that action right now' }); return
+    }
 
     try {
       const prevState = room.state
       const nextState = reducer(room.state, payload.action)
       room.state = nextState
 
+      if (payload.action.type === 'START_HAND') {
+        console.log('[ROOM] game start hand room=%s handNumber=%s seatUserId size=%s', code, nextState.handNumber, room.seatUserId.size)
+      }
+
       // Step 3: Persist per-user lifetime stats exactly once when the server authoritative
       // reducer transitions into GAME_END (team reaches/surpasses target score).
+      // Keys use stable userId (from session / seatUserId), not socketId or username.
       if (prevState.phase !== 'GAME_END' && nextState.phase === 'GAME_END' && nextState.winnerTeamId) {
         const winnerTeamId = nextState.winnerTeamId
         const seenUserIds = new Set<string>()
         const handKey = `${code}:${nextState.handNumber}:${nextState.teams.map(t => t.score).sort().join(',')}:${winnerTeamId}`
+        const handId = nextState.handId ?? handKey
+        const lastResult = nextState.lastHandResult
+        const bidderSeat = lastResult?.bidderPlayerIndex ?? null
+        const didMakeBid = lastResult ? (lastResult.bidderMadeBid || lastResult.stmSucceeded) : false
+
+        const seatToUserId = Object.fromEntries(Array.from(room.seatUserId.entries()).map(([s, u]) => [String(s), u]))
+        const uniqueUserIds = [...new Set(room.seatUserId.values())].map(String).filter(Boolean)
+        console.log('[STATS] game ended room=%s winnerTeamId=%s seat->userId=%s persisting userIds=%s', code, winnerTeamId, JSON.stringify(seatToUserId), JSON.stringify(uniqueUserIds))
+        if (uniqueUserIds.length === 0) {
+          console.warn('[STATS] no authenticated users in room (seatUserId empty) - stats will not be persisted; ensure players log in before joining')
+        }
 
         for (const [seat, uidRaw] of room.seatUserId.entries()) {
           const uidStr = String(uidRaw)
@@ -791,17 +969,24 @@ io.on('connection', (socket) => {
           seenUserIds.add(uidStr)
 
           const userId = Number(uidStr)
-          if (!Number.isFinite(userId)) continue
+          if (!Number.isFinite(userId)) {
+            console.log('[STATS] skip seat=%s userId invalid (not a number)', seat)
+            continue
+          }
 
           const player = nextState.players[seat]
-          if (!player) continue
+          if (!player) {
+            console.log('[STATS] skip userId=%s seat=%s no player', uidStr, seat)
+            continue
+          }
 
           const perGame = nextState.statsByPlayerId[player.id]
-          const bidsWon = perGame?.bidsWon ?? 0
-          const bidsMade = perGame?.bidsMade ?? 0
           const stmSuccess = perGame?.stmSuccess ?? 0
 
           const didWin = player.teamId === winnerTeamId
+          const didAttempt = bidderSeat !== null && seat === bidderSeat
+          const didMake = didAttempt && didMakeBid
+
           const dbUser = getUserById(userId)
           const username = dbUser?.username ?? `user_${userId}`
 
@@ -809,10 +994,11 @@ io.on('connection', (socket) => {
             userId,
             username,
             didWin,
-            bidsWon,
-            bidsMade,
             stmSuccess,
             handKey,
+            handId,
+            didAttempt,
+            didMake,
           })
         }
       }
@@ -825,6 +1011,7 @@ io.on('connection', (socket) => {
   })
 
   socket.on('disconnect', () => {
+    console.log('[WS] disconnect socketId=%s userId=%s', socket.id, getSocketUserId(socket) ?? 'anonymous')
     for (const room of rooms.values()) {
       detachSocket(room, socket.id)
       emitRoomState(room)
@@ -847,6 +1034,13 @@ if (process.env.NODE_ENV === 'production' && hasClientBuild) {
 
 httpServer.listen(PORT, HOST, () => {
   const env = process.env.NODE_ENV || 'development'
-  console.log(`Server ready (${env}) at http://localhost:${PORT}`)
-  console.log(`Health check: curl -i -H "Accept: application/json" http://localhost:${PORT}/healthz`)
+  const addr = httpServer.address()
+  const bound = addr && typeof addr === 'object' ? `${addr.address}:${addr.port}` : ''
+  let buildStamp = 'none'
+  try {
+    const stampPath = path.join(__dirname, '..', 'build-stamp.json')
+    const stamp = JSON.parse(fs.readFileSync(stampPath, 'utf8')) as { timestamp?: string }
+    buildStamp = stamp?.timestamp ?? 'unknown'
+  } catch { /* ignore */ }
+  console.log(`Server listening on http://${HOST}:${PORT} (${env}) NODE_ENV=${process.env.NODE_ENV ?? ''} PORT=${PORT} HOST=${HOST} bound=${bound} build=${buildStamp}`)
 })

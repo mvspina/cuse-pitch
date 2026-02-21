@@ -103,6 +103,9 @@ export type GameState = {
   lastHandResult: HandResult | null
   winnerTeamId: string | null
 
+  /** Stable unique id for the current hand; set when hand starts (START_HAND). */
+  handId?: string
+
   messageLog: string[]
   statsByPlayerId: Record<string, PlayerStats>
 }

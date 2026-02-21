@@ -101,6 +101,8 @@ export type GameState = {
   lastHandResult: HandResult | null
   winnerTeamId: string | null
 
+  handId?: string
+
   messageLog: string[]
   statsByPlayerId: Record<string, PlayerStats>
 }

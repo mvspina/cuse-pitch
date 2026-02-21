@@ -1,0 +1,8 @@
+# Prefer image dist from npm run build; avoid copying stale local dist
+server/dist
+client/dist
+server/build-stamp.json
+node_modules
+.git
+*.log
+.env
