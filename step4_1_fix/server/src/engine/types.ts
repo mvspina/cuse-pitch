@@ -107,9 +107,10 @@ export type GameState = {
   statsByPlayerId: Record<string, PlayerStats>
 }
 
+export type Mulligan7Action = { type: 'MULLIGAN_7', playerIndex: number }
+
 export type Action =
   | Mulligan7Action
-
   | { type: 'NEW_GAME', settings: GameSettings, names?: string[] }
   | { type: 'SET_TARGET', targetScore: 11 | 21 }
   | { type: 'SET_PLAYERCOUNT', playerCount: 2 | 3 | 4 | 6 }

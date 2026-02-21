@@ -75,10 +75,9 @@ async function sendResetEmail(opts: { to: string; resetUrl: string }): Promise<v
   const pass = process.env.SMTP_PASS
   const from = process.env.SMTP_FROM || 'no-reply@cusepitch.local'
 
-  // If SMTP is not configured, we log the link so you can test locally.
   if (!host || !user || !pass) {
     // eslint-disable-next-line no-console
-    console.log(`[Cuse Pitch] Password reset link for ${opts.to}: ${opts.resetUrl}`)
+    console.log('[Cuse Pitch] Password reset requested; SMTP not configured (set SMTP_HOST, SMTP_USER, SMTP_PASS). Link not sent.')
     return
   }
 
@@ -89,17 +88,27 @@ async function sendResetEmail(opts: { to: string; resetUrl: string }): Promise<v
     auth: { user, pass },
   })
 
-  await transporter.sendMail({
-    from,
-    to: opts.to,
-    subject: 'Cuse Pitch password reset',
-    text: `Reset your password using this link: ${opts.resetUrl}`,
-  })
+  try {
+    await transporter.sendMail({
+      from,
+      to: opts.to,
+      subject: 'Cuse Pitch password reset',
+      text: `Reset your password using this link: ${opts.resetUrl}`,
+    })
+    // eslint-disable-next-line no-console
+    console.log('[Cuse Pitch] Password reset email sent successfully to', opts.to.replace(/^(.{2})[\s\S]*@/, '$1***@'))
+  } catch (err: any) {
+    // eslint-disable-next-line no-console
+    console.warn('[Cuse Pitch] Password reset email send failed:', err?.message ?? err)
+    throw err
+  }
 }
 
 function getBaseUrl(): string {
-  // Used in email links. In dev, you can set this to your LAN address.
-  return (process.env.APP_BASE_URL || '').trim() || 'http://localhost:5173'
+  const env = (process.env.APP_BASE_URL || '').trim()
+  if (env) return env
+  if (process.env.NODE_ENV === 'production') return 'https://syracuse-pitch.fly.dev'
+  return 'http://localhost:5173'
 }
 
 export async function createResetToken(opts: { userId: number; email: string }): Promise<{ token: string; resetUrl: string }> {

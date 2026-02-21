@@ -1,6 +1,8 @@
 import fs from 'fs'
 import path from 'path'
 
+const MAX_PROCESSED_HAND_KEYS = 200
+
 export type PersistedStats = {
   userId: number
   username: string
@@ -11,6 +13,8 @@ export type PersistedStats = {
   bidsMade: number
   stmSuccess: number
   updatedAt: string
+  /** Keys of completed hands/games already applied; keep last 200 for de-dup. */
+  processedHandKeys?: string[]
 }
 
 type StoreShape = {
@@ -45,10 +49,10 @@ function readStore(): StoreShape {
       ? (parsed.statsByUserId as Record<string, PersistedStats>)
       : {}
     return { statsByUserId }
-  } catch {
-    const empty: StoreShape = { statsByUserId: {} }
-    writeStore(empty)
-    return empty
+  } catch (err) {
+    // Do NOT overwrite the file with empty - that would wipe all stats. Return empty in-memory only.
+    console.warn('[STATS] readStore failed (file corrupt or unreadable), returning empty in-memory only:', (err as Error)?.message ?? err)
+    return { statsByUserId: {} }
   }
 }
 
@@ -63,7 +67,13 @@ function writeStore(store: StoreShape): void {
 
 export function getStats(userId: number): PersistedStats | null {
   const store = readStore()
-  return store.statsByUserId[String(userId)] ?? null
+  const key = String(userId)
+  const found = store.statsByUserId[key] ?? null
+  const values = found
+    ? { gamesPlayed: found.gamesPlayed, wins: found.wins, losses: found.losses, bidsWon: found.bidsWon, bidsMade: found.bidsMade, stmSuccess: found.stmSuccess }
+    : null
+  console.log('[STATS LOAD] userId=%s found=%s values=%s', key, !!found, values != null ? JSON.stringify(values) : 'null')
+  return found
 }
 
 export function upsertAddGame(params: {
@@ -73,23 +83,52 @@ export function upsertAddGame(params: {
   bidsWon: number
   bidsMade: number
   stmSuccess: number
+  /** Stable key for this completed hand/game; if already in processedHandKeys, skip apply. */
+  handKey: string
 }): PersistedStats {
   const store = readStore()
   const key = String(params.userId)
   const now = new Date().toISOString()
 
   const existing = store.statsByUserId[key]
-  const base: PersistedStats = existing ?? {
-    userId: params.userId,
-    username: params.username,
-    gamesPlayed: 0,
-    wins: 0,
-    losses: 0,
-    bidsWon: 0,
-    bidsMade: 0,
-    stmSuccess: 0,
-    updatedAt: now,
+  const processedKeys = existing?.processedHandKeys && Array.isArray(existing.processedHandKeys) ? existing.processedHandKeys : []
+
+  if (processedKeys.includes(params.handKey)) {
+    console.log('[STATS APPLY HAND] userId=%s handKey=%s skipped (already processed)', key, params.handKey)
+    return existing!
   }
+
+  const base: PersistedStats = existing ?? (() => {
+    console.log('[STATS INIT] userId=%s (new user, no existing record)', key)
+    return {
+      userId: params.userId,
+      username: params.username,
+      gamesPlayed: 0,
+      wins: 0,
+      losses: 0,
+      bidsWon: 0,
+      bidsMade: 0,
+      stmSuccess: 0,
+      updatedAt: now,
+      processedHandKeys: [],
+    }
+  })()
+
+  const inc = {
+    bidsMade: Math.max(0, params.bidsMade ?? 0),
+    bidsWon: Math.max(0, params.bidsWon ?? 0),
+    didWin: params.didWin,
+    stmSuccess: Math.max(0, params.stmSuccess ?? 0),
+  }
+  console.log('[STATS APPLY HAND]', { userId: params.userId, handKey: params.handKey, inc })
+
+  let bidsMade = base.bidsMade + inc.bidsMade
+  let bidsWon = base.bidsWon + inc.bidsWon
+  if (bidsMade < 0) bidsMade = 0
+  if (bidsWon < 0) bidsWon = 0
+  if (bidsWon > bidsMade) bidsWon = bidsMade
+
+  const nextProcessed = [...(base.processedHandKeys ?? []), params.handKey].slice(-MAX_PROCESSED_HAND_KEYS)
 
   const next: PersistedStats = {
     ...base,
@@ -97,13 +136,16 @@ export function upsertAddGame(params: {
     gamesPlayed: base.gamesPlayed + 1,
     wins: base.wins + (params.didWin ? 1 : 0),
     losses: base.losses + (params.didWin ? 0 : 1),
-    bidsWon: base.bidsWon + Math.max(0, params.bidsWon || 0),
-    bidsMade: base.bidsMade + Math.max(0, params.bidsMade || 0),
-    stmSuccess: base.stmSuccess + Math.max(0, params.stmSuccess || 0),
+    bidsWon,
+    bidsMade,
+    stmSuccess: base.stmSuccess + inc.stmSuccess,
     updatedAt: now,
+    processedHandKeys: nextProcessed,
   }
 
   store.statsByUserId[key] = next
   writeStore(store)
+  const values = { gamesPlayed: next.gamesPlayed, wins: next.wins, losses: next.losses, bidsWon: next.bidsWon, bidsMade: next.bidsMade, stmSuccess: next.stmSuccess }
+  console.log('[STATS SAVE] userId=%s values=%s', key, JSON.stringify(values))
   return next
 }

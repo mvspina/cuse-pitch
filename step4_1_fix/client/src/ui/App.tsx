@@ -7,6 +7,7 @@ const suitOptions: Suit[] = ['S','H','D','C']
 const TOKEN_KEY = 'cuse-pitch-token'
 const ROOM_KEY = 'cuse-pitch-room'
 const SFX_KEY = 'cuse-pitch-sfx-enabled'
+const AUTH_USER_KEY = 'cuse-pitch-auth-user'
 
 function mulberry32(seed: number) {
   return function () {
@@ -258,7 +259,16 @@ export default function App() {
   const [settings, setSettings] = useState<GameSettings>({ targetScore: 11, playerCount: 4 })
   const sfx = useSfx()
 
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null)
+  const [authUser, setAuthUser] = useState<AuthUser | null>(() => {
+    try {
+      const raw = localStorage.getItem(AUTH_USER_KEY)
+      if (!raw) return null
+      const u = JSON.parse(raw) as AuthUser
+      return u?.username ? u : null
+    } catch {
+      return null
+    }
+  })
   const [authMode, setAuthMode] = useState<null | 'login' | 'signup' | 'resetRequest' | 'resetConfirm'>(null)
   const [authUsername, setAuthUsername] = useState('')
   const [authEmail, setAuthEmail] = useState('')
@@ -342,9 +352,14 @@ export default function App() {
         if (u?.username) {
           setAuthUser(u)
           setMyName(u.username)
+          localStorage.setItem(AUTH_USER_KEY, JSON.stringify(u))
+        } else {
+          localStorage.removeItem(AUTH_USER_KEY)
+          setAuthUser(null)
         }
       } catch {
-        // not logged in
+        localStorage.removeItem(AUTH_USER_KEY)
+        setAuthUser(null)
       }
     })()
   }, [])
@@ -380,6 +395,7 @@ export default function App() {
       if (u?.username) {
         setAuthUser(u)
         setMyName(u.username)
+        localStorage.setItem(AUTH_USER_KEY, JSON.stringify(u))
         setAuthMode(null)
         setAuthPassword('')
       }
@@ -432,6 +448,7 @@ export default function App() {
     setAuthError(null)
     try {
       await authFetch('/api/auth/logout', { method: 'POST' })
+      localStorage.removeItem(AUTH_USER_KEY)
       setAuthUser(null)
       setAuthMode(null)
     } catch (e: any) {
@@ -460,6 +477,9 @@ export default function App() {
     setProfileOpen(true)
     void loadProfileStats()
   }
+  useEffect(() => {
+    if (state?.phase === 'GAME_END' && authUser) void loadProfileStats()
+  }, [state?.phase, authUser?.id])
 
 const prevPlaysLenRef = useRef<number>(0)
   const prevTrickCountRef = useRef<number>(0)
@@ -497,7 +517,7 @@ const prevPlaysLenRef = useRef<number>(0)
   const [trumpRippleTick, setTrumpRippleTick] = useState(0)
 
   useEffect(() => {
-    const serverUrl = window.location.origin
+    const serverUrl = (import.meta.env.VITE_SOCKET_URL as string | undefined)?.trim() || window.location.origin
     const s = io(serverUrl, { transports: ['polling','websocket'], withCredentials: true })
     setNet(n => ({ ...n, socket: s }))
 
@@ -691,7 +711,7 @@ const prevPlaysLenRef = useRef<number>(0)
     setHomeBusy('join')
     rpc(
       'joinRoom',
-      { roomCode: code, name: nameTrim || 'Player', spectate: watchOnly },
+      { roomCode: code, name: (authUser?.username || myName || 'Player').trim() || 'Player', spectate: watchOnly },
       (resp) => {
         try {
           localStorage.setItem(ROOM_KEY, resp.roomCode)
@@ -719,7 +739,7 @@ const prevPlaysLenRef = useRef<number>(0)
       return
     }
     setHomeBusy('join')
-    s.emit('joinInvite', { inviteCode: code, name: nameTrim || 'Player', spectate: watchOnly }, (resp: any) => {
+    s.emit('joinInvite', { inviteCode: code, name: (authUser?.username || myName || 'Player').trim() || 'Player', spectate: watchOnly }, (resp: any) => {
       if (!resp?.ok) {
         const msg = resp?.error ?? 'Invite join failed'
         setNet(n => ({ ...n, error: msg }))
@@ -751,7 +771,7 @@ const prevPlaysLenRef = useRef<number>(0)
 
   function takeSeat(seat: number) {
     if (!net.roomCode || !net.token) return
-    rpc('takeSeat', { roomCode: net.roomCode, token: net.token, seat, name: myName })
+    rpc('takeSeat', { roomCode: net.roomCode, token: net.token, seat, name: (authUser?.username || myName).trim() || myName })
   }
 
   function leaveSeat() {

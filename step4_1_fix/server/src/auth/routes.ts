@@ -101,6 +101,9 @@ export function buildAuthRouter(): Router {
     const eErr = validateEmail(email)
     if (eErr) return res.status(400).json({ ok: false, error: eErr })
 
+    // eslint-disable-next-line no-console
+    console.log('[Cuse Pitch] Password reset requested for', email ? `${email.replace(/^(.{2})[\s\S]*@/, '$1***@')}` : '(empty)')
+
     const user = getUserByEmail(email)
     if (!user) return res.json({ ok: true })
 

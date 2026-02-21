@@ -35,7 +35,7 @@ export function buildPlayersTeams(settings: GameSettings, names?: string[]): { p
     teams.push({ id: 'A', name: 'Team A', score: 0, sets: 0 }, { id: 'B', name: 'Team B', score: 0, sets: 0 })
     players.push({ id: 'P1', name: nm(0), teamId: 'A' }, { id: 'P2', name: nm(1), teamId: 'B' })
   } else if (pc === 3) {
-    teams.push({ id: 'T1', name: nm(0), score: 0 }, { id: 'T2', name: nm(1), score: 0 }, { id: 'T3', name: nm(2), score: 0 })
+    teams.push({ id: 'T1', name: nm(0), score: 0, sets: 0 }, { id: 'T2', name: nm(1), score: 0, sets: 0 }, { id: 'T3', name: nm(2), score: 0, sets: 0 })
     players.push({ id: 'P1', name: nm(0), teamId: 'T1' }, { id: 'P2', name: nm(1), teamId: 'T2' }, { id: 'P3', name: nm(2), teamId: 'T3' })
   } else if (pc === 4) {
     teams.push({ id: 'A', name: 'Team A', score: 0, sets: 0 }, { id: 'B', name: 'Team B', score: 0, sets: 0 })
@@ -47,9 +47,9 @@ export function buildPlayersTeams(settings: GameSettings, names?: string[]): { p
     )
     } else if (pc === 6) {
     teams.push(
-      { id: 'A', name: 'Team A', score: 0 },
-      { id: 'B', name: 'Team B', score: 0 },
-      { id: 'C', name: 'Team C', score: 0 },
+      { id: 'A', name: 'Team A', score: 0, sets: 0 },
+      { id: 'B', name: 'Team B', score: 0, sets: 0 },
+      { id: 'C', name: 'Team C', score: 0, sets: 0 },
     )
     players.push(
       { id: 'P1', name: nm(0), teamId: 'A' },
@@ -551,7 +551,7 @@ if (action.type === 'PLACE_BID') {
       hands6: emptyHands(state.players.length),
       currentPlayerIndex: state.dealerIndex,
     }
-    out = log(out, `Dealer chose trump: ${suitLabel[action.suit]}. Discard phase.`)
+    out = log(out, `Dealer chose trump: ${suitLabel[action.suit as Suit]}. Discard phase.`)
     return out
   }
 

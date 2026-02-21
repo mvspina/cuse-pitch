@@ -45,6 +45,7 @@ type StatePayload = {
   isHost: boolean
   occupied: boolean[]
   state: GameState
+  rematchReady: boolean[]
 }
 
 const app = express()
@@ -57,6 +58,22 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
 }))
 app.use(express.json())
+
+// Health endpoints first (before static or catch-all) so they always return JSON
+app.get('/health', (_req, res) => res.status(200).json({ ok: true }))
+app.get('/healthz', (_req, res) => res.status(200).json({ ok: true, env: process.env.NODE_ENV ?? 'unknown', ts: Date.now() }))
+if (process.env.NODE_ENV !== 'production') {
+  app.get('/debug/email', (_req, res) => {
+    const appBaseUrl = (process.env.APP_BASE_URL || '').trim() || (process.env.NODE_ENV === 'production' ? 'https://syracuse-pitch.fly.dev' : 'http://localhost:5173')
+    res.status(200).json({
+      smtpConfigured: !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS),
+      appBaseUrl,
+      hasSmtpFrom: !!process.env.SMTP_FROM,
+    })
+  })
+}
+
+app.set('trust proxy', 1)
 
 // session-file-store is CommonJS; require keeps it compatible with tsx/tsconfig.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -74,8 +91,8 @@ const sessionMiddleware = session({
   }),
   cookie: {
     httpOnly: true,
+    secure: 'auto',
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
     maxAge: 1000 * 60 * 60 * 24 * 30,
   },
 })
@@ -108,7 +125,7 @@ app.get('/api/stats/me', (req, res) => {
   const stmSuccess = stats?.stmSuccess ?? 0
 
   const winPct = gamesPlayed > 0 ? wins / gamesPlayed : 0
-  const bidWinPct = bidsWon > 0 ? bidsMade / bidsWon : 0
+  const bidWinPct = bidsMade > 0 ? bidsWon / bidsMade : 0
 
   res.json({
     ok: true,
@@ -126,18 +143,18 @@ app.get('/api/stats/me', (req, res) => {
     },
   })
 })
-app.get('/health', (_req, res) => res.json({ ok: true }))
 
-// Client build output
-const distPath = path.join(__dirname, '../../client/dist')
-const hasClientBuild = fs.existsSync(path.join(distPath, 'index.html'))
-if (hasClientBuild) {
-  app.use(express.static(distPath))
+// Client build output: only in production so dev keeps using Vite
+const clientDistPath = path.join(__dirname, '../../client/dist')
+const hasClientBuild = fs.existsSync(path.join(clientDistPath, 'index.html'))
+if (process.env.NODE_ENV === 'production' && hasClientBuild) {
+  app.use(express.static(clientDistPath))
 }
 
 const httpServer = http.createServer(app)
 const io = new Server(httpServer, {
   cors: { origin: true, credentials: true },
+  transports: ['websocket', 'polling'],
   // Mobile browsers can pause background tabs and miss heartbeats; a slightly longer timeout
   // reduces false disconnects and improves reconnect stability.
   pingInterval: 25000,
@@ -259,8 +276,8 @@ function maskStateForPlayer(state: GameState, playerIndex: number | null): GameS
   clone.dealtHands7 = state.dealtHands7.map((h, i) => (i === keepIndex ? h : []))
   clone.discardPiles = state.discardPiles.map((h, i) => (i === keepIndex ? h : []))
 
-  // Show 6-card hands only once play starts
-  if (clone.phase === 'PLAY' || clone.phase === 'HAND_END' || clone.phase === 'GAME_END') {
+  // Show 6-card hands only once play starts (PLAY), through scoring (SCORE_HAND), to game end (GAME_END)
+  if (clone.phase === 'PLAY' || clone.phase === 'SCORE_HAND' || clone.phase === 'GAME_END') {
     clone.hands6 = state.hands6.map((h, i) => (i === keepIndex ? h : []))
   } else {
     clone.hands6 = Array.from({ length: pc }, () => [])
@@ -376,8 +393,9 @@ io.on('connection', (socket) => {
   socket.on('createRoom', (payload: { settings: GameSettings, name: string, token?: string }, cb?: (resp: any) => void) => {
     try {
       const authed = getAuthed()
+      const authedId = authed?.id != null ? String(authed.id) : undefined
       const chosenName = (authed?.username || payload.name || 'Host').trim()
-      const room = makeRoom(payload.settings, chosenName, authed?.id)
+      const room = makeRoom(payload.settings, chosenName, authedId)
       rooms.set(room.code, room)
 
       attachSocketToToken(room, socket.id, room.hostToken)
@@ -398,17 +416,18 @@ io.on('connection', (socket) => {
     let token = payload.token && payload.token.length > 10 ? payload.token : genToken()
 
     const authed = (socket.data as any).user as SessionUser | null
+    const authedId = authed?.id != null ? String(authed.id) : undefined
 
     // If the user is logged in and already owns a seat in this room, prefer that seat's token.
-    if (authed?.id) {
+    if (authedId) {
       for (const [s, uid] of room.seatUserId.entries()) {
-        if (uid === authed.id) {
+        if (uid === authedId) {
           const existing = room.seatToken.get(s)
           if (existing) token = existing
           break
         }
       }
-      room.tokenUserId.set(token, authed.id)
+      room.tokenUserId.set(token, authedId)
     }
 
     attachSocketToToken(room, socket.id, token)
@@ -426,11 +445,11 @@ io.on('connection', (socket) => {
         if (i === 0) continue
         if (!room.seatToken.has(i)) { takeSeat(room, token, i); seat = i; break }
       }
+      if (seat !== null && authedId) room.seatUserId.set(seat, authedId)
     }
 
     // Set name only if seated and setup
     if (seat !== null && room.state.phase === 'SETUP') {
-      const authed = (socket.data as any).user as SessionUser | null
       const chosenName = (authed?.username || payload.name || `Player ${seat + 1}`).trim()
       room.state = reducer(room.state, { type: 'SET_NAME', playerIndex: seat, name: chosenName })
     }
@@ -444,8 +463,9 @@ io.on('connection', (socket) => {
     const room = rooms.get(code)
     if (!room) { cb?.({ ok: false, error: 'Room not found' }); return }
     const authed = (socket.data as any).user as SessionUser | null
+    const authedId = authed?.id != null ? String(authed.id) : undefined
     const hostUserId = room.seatUserId.get(0) ?? null
-    if (payload.token !== room.hostToken && (!authed?.id || authed.id !== hostUserId)) { cb?.({ ok: false, error: 'Host only' }); return }
+    if (payload.token !== room.hostToken && (!authedId || authedId !== hostUserId)) { cb?.({ ok: false, error: 'Host only' }); return }
 
     const inv = addInvite(code)
     cb?.({ ok: true, inviteCode: inv.code, roomCode: code })
@@ -471,17 +491,18 @@ io.on('connection', (socket) => {
     const code = inv.roomCode
     let token = genToken()
     const authed = getAuthed()
+    const authedId = authed?.id != null ? String(authed.id) : undefined
 
     // If the user is logged in and already owns a seat in this room, prefer that seat's token.
-    if (authed?.id) {
+    if (authedId) {
       for (const [s, uid] of room.seatUserId.entries()) {
-        if (uid === authed.id) {
+        if (uid === authedId) {
           const existing = room.seatToken.get(s)
           if (existing) token = existing
           break
         }
       }
-      room.tokenUserId.set(token, authed.id)
+      room.tokenUserId.set(token, authedId)
     }
 
     attachSocketToToken(room, socket.id, token)
@@ -494,6 +515,7 @@ io.on('connection', (socket) => {
         if (i === 0) continue
         if (!room.seatToken.has(i)) { takeSeat(room, token, i); seat = i; break }
       }
+      if (seat !== null && authedId) room.seatUserId.set(seat, authedId)
     }
 
     if (seat !== null && room.state.phase === 'SETUP') {
@@ -514,8 +536,9 @@ io.on('connection', (socket) => {
     if (!token) { cb?.({ ok: false, error: 'Missing token' }); return }
 
     const authed = (socket.data as any).user as SessionUser | null
+    const authedId = authed?.id != null ? String(authed.id) : undefined
     const tokenUserId = room.tokenUserId.get(token)
-    if (tokenUserId && authed?.id && tokenUserId !== authed.id) {
+    if (tokenUserId && authedId && tokenUserId !== authedId) {
       cb?.({ ok: false, error: 'Token belongs to another user' }); return
     }
 
@@ -534,23 +557,24 @@ io.on('connection', (socket) => {
     if (!room) { cb?.({ ok: false, error: 'Room not found' }); return }
 
     const authed = (socket.data as any).user as SessionUser | null
-    if (!authed?.id) { cb?.({ ok: false, error: 'Not logged in' }); return }
+    const authedId = authed?.id != null ? String(authed.id) : undefined
+    if (!authedId) { cb?.({ ok: false, error: 'Not logged in' }); return }
 
     // If this user already owns a seat in this room, reattach to that seat's token.
     let seat: number | null = null
     for (const [s, uid] of room.seatUserId.entries()) {
-      if (uid === authed.id) { seat = s; break }
+      if (uid === authedId) { seat = s; break }
     }
 
     let token: string
     if (seat !== null) {
       token = room.seatToken.get(seat) || genToken()
-      room.tokenUserId.set(token, authed.id)
+      room.tokenUserId.set(token, authedId)
       attachSocketToToken(room, socket.id, token)
     } else {
       // No seat: join as spectator, but still bind this socket to a token for future seat selection.
       token = genToken()
-      room.tokenUserId.set(token, authed.id)
+      room.tokenUserId.set(token, authedId)
       attachSocketToToken(room, socket.id, token)
     }
 
@@ -573,9 +597,10 @@ io.on('connection', (socket) => {
     if (!res.ok) { cb?.(res); return }
 
     const authed = (socket.data as any).user as SessionUser | null
-    if (authed?.id) {
-      room.seatUserId.set(payload.seat, authed.id)
-      room.tokenUserId.set(payload.token, authed.id)
+    const authedId = authed?.id != null ? String(authed.id) : undefined
+    if (authedId) {
+      room.seatUserId.set(payload.seat, authedId)
+      room.tokenUserId.set(payload.token, authedId)
     }
     const chosenName = (authed?.username || payload.name || '').trim()
     if (chosenName.length > 0) {
@@ -758,6 +783,7 @@ io.on('connection', (socket) => {
       if (prevState.phase !== 'GAME_END' && nextState.phase === 'GAME_END' && nextState.winnerTeamId) {
         const winnerTeamId = nextState.winnerTeamId
         const seenUserIds = new Set<string>()
+        const handKey = `${code}:${nextState.handNumber}:${nextState.teams.map(t => t.score).sort().join(',')}:${winnerTeamId}`
 
         for (const [seat, uidRaw] of room.seatUserId.entries()) {
           const uidStr = String(uidRaw)
@@ -786,6 +812,7 @@ io.on('connection', (socket) => {
             bidsWon,
             bidsMade,
             stmSuccess,
+            handKey,
           })
         }
       }
@@ -805,14 +832,21 @@ io.on('connection', (socket) => {
   })
 })
 
-const PORT = process.env.PORT ? Number(process.env.PORT) : 3001
-if (hasClientBuild) {
-  app.get('*', (_req, res) => {
-    res.sendFile(path.join(distPath, 'index.html'))
+const HOST = '0.0.0.0'
+const PORT = Number(process.env.PORT) || 3000
+
+if (process.env.NODE_ENV === 'production' && hasClientBuild) {
+  app.get('*', (req, res, next) => {
+    if (req.method !== 'GET') return next()
+    const accept = req.headers.accept ?? ''
+    if (!accept.includes('text/html')) return next()
+    if (req.path === '/health' || req.path === '/healthz' || req.path.startsWith('/api') || req.path.startsWith('/socket.io')) return next()
+    res.sendFile(path.join(clientDistPath, 'index.html'))
   })
 }
 
-
-httpServer.listen(PORT, () => {
-  console.log(`Server listening on http://localhost:${PORT}`)
+httpServer.listen(PORT, HOST, () => {
+  const env = process.env.NODE_ENV || 'development'
+  console.log(`Server ready (${env}) at http://localhost:${PORT}`)
+  console.log(`Health check: curl -i -H "Accept: application/json" http://localhost:${PORT}/healthz`)
 })

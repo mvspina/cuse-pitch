@@ -1,0 +1,15 @@
+{
+  "statsByUserId": {
+    "1": {
+      "userId": 1,
+      "username": "UncleOneEye",
+      "gamesPlayed": 1,
+      "wins": 0,
+      "losses": 1,
+      "bidsWon": 1,
+      "bidsMade": 0,
+      "stmSuccess": 0,
+      "updatedAt": "2026-02-20T18:43:53.412Z"
+    }
+  }
+}

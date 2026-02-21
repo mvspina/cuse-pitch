@@ -56,11 +56,12 @@ fly deploy
 - For real internet play, you will deploy the server and share the URL.
 
 
+## Production sanity checks (Phase 1)
+- [ ] From `step4_1_fix`, run `npm run build` then `npm start`
+- [ ] Visit http://localhost:3001 and confirm the app loads (no Vite dev server)
+- [ ] Multiplayer: open two browsers, join same room, play a few actions
+- [ ] Refresh one client and confirm reconnect recovery works
+- [ ] Dev: `npm run dev` starts both processes and the app works (client uses VITE_SOCKET_URL from `.env.development`)
+
 ## Production note
-This version fixes Windows production start by compiling the server to CommonJS.
-
-
-Fix: distPath scope for production SPA catch-all.
-
-
-Fix: serve built client whenever client/dist exists (no reliance on NODE_ENV), and start sets NODE_ENV=production.
+This version fixes Windows production start by compiling the server to CommonJS. Static client is served only when NODE_ENV=production and client/dist exists.
