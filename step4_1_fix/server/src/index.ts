@@ -43,6 +43,10 @@ type Room = {
   /** Stable host identity; used for host-only auth after socket reconnects. */
   hostUserId: string | null
   rematchReady: Set<number>
+
+  // In-game chat (in memory, max 50 messages, no persistence)
+  chatMessages: Array<{ id: string; ts: number; userId: number | null; name: string; text: string }>
+  lastChatAtBySocketId: Map<string, number>
 }
 
 type StatePayload = {
@@ -304,6 +308,8 @@ async function bootstrap(): Promise<void> {
       hostToken,
       hostUserId: hostUserId ?? null,
       rematchReady: new Set(),
+      chatMessages: [],
+      lastChatAtBySocketId: new Map(),
     }
 
     room.seatToken.set(0, hostToken)
@@ -764,6 +770,67 @@ async function bootstrap(): Promise<void> {
       emitRoomState(room)
       console.log('[ROOM] room:leave success userId=%s roomCode=%s', userId, code)
       cb?.({ ok: true })
+    })
+
+    socket.on('chat:send', (payload: { roomCode: string; text: string }, cb?: (resp: any) => void) => {
+      const code = (payload.roomCode || '').toUpperCase().trim()
+      const room = rooms.get(code)
+      if (!room) {
+        cb?.({ ok: false, error: 'Room not found' })
+        return
+      }
+      const token = room.tokenBySocketId.get(socket.id)
+      if (!token) {
+        cb?.({ ok: false, error: 'Not in room' })
+        return
+      }
+      const rawText = typeof payload.text === 'string' ? payload.text.trim() : ''
+      if (rawText.length < 1 || rawText.length > 200) {
+        cb?.({ ok: false, error: 'Message must be 1–200 characters' })
+        return
+      }
+      const now = Date.now()
+      const lastAt = room.lastChatAtBySocketId.get(socket.id) ?? 0
+      if (now - lastAt < 1000) {
+        cb?.({ ok: false, error: 'rate_limited' })
+        return
+      }
+      room.lastChatAtBySocketId.set(socket.id, now)
+      const uidStr = getSocketUserId(socket)
+      const userIdNum = uidStr != null ? parseInt(uidStr, 10) : null
+      const userId = Number.isFinite(userIdNum) ? userIdNum : null
+      const seat = room.tokenSeat.get(token)
+      const name = (seat != null && room.state.players[seat]?.name)
+        ? room.state.players[seat].name
+        : (userId != null ? `User ${userId}` : 'Guest')
+      const message = {
+        id: `${now}-${Math.random()}`,
+        ts: now,
+        userId,
+        name,
+        text: rawText,
+      }
+      room.chatMessages.push(message)
+      if (room.chatMessages.length > 50) room.chatMessages = room.chatMessages.slice(-50)
+      console.log('[CHAT] send room=%s userId=%s name=%s len=%s', code, userId ?? 'guest', name, rawText.length)
+      io.to(code).emit('chat:message', { roomCode: code, message })
+      console.log('[CHAT] broadcast room=%s total=%s', code, room.chatMessages.length)
+      cb?.({ ok: true })
+    })
+
+    socket.on('chat:history', (payload: { roomCode: string }, cb?: (resp: any) => void) => {
+      const code = (payload.roomCode || '').toUpperCase().trim()
+      const room = rooms.get(code)
+      if (!room) {
+        cb?.({ ok: false, error: 'Room not found' })
+        return
+      }
+      const token = room.tokenBySocketId.get(socket.id)
+      if (!token) {
+        cb?.({ ok: false, error: 'Not in room' })
+        return
+      }
+      cb?.({ ok: true, messages: room.chatMessages ?? [] })
     })
 
     socket.on('leaderboard:get', async (payload: { limit?: number }, cb?: (resp: any) => void) => {
