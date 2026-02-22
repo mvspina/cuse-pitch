@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useRef, useEffect } from 'react'
 
 export type ChatMessage = {
   id: string
@@ -30,6 +30,31 @@ export default function ChatPanel(props: ChatPanelProps) {
   const [input, setInput] = useState('')
   const hasMessages = Array.isArray(messages) && messages.length > 0
 
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const shouldStickToBottomRef = useRef(true)
+
+  function handleScroll() {
+    const el = scrollRef.current
+    if (!el) return
+    const threshold = 40
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    shouldStickToBottomRef.current = distanceFromBottom < threshold
+  }
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  }, [])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    if (shouldStickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [messages.length])
+
   const send = useCallback(() => {
     const trimmed = input.trim()
     if (disabled || !trimmed || !onSend) return
@@ -55,6 +80,8 @@ export default function ChatPanel(props: ChatPanelProps) {
         <div className="small" style={{ marginTop: 8, color: '#f88' }}>{error}</div>
       )}
       <div
+        ref={scrollRef}
+        onScroll={handleScroll}
         style={{
           maxHeight: 200,
           overflowY: 'auto',
