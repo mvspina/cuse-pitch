@@ -516,14 +516,17 @@ async function bootstrap(): Promise<void> {
       const code = (payload.roomCode || '').toUpperCase().trim()
       const room = rooms.get(code)
       if (!room) { cb?.({ ok: false, error: 'Room not found' }); return }
-  
+
       let token = payload.token && payload.token.length > 10 ? payload.token : genToken()
-  
+      let hostReconnected = false
+      let reclaimedSeat = false
+
       const authed = (socket.data as any).user as SessionUser | null
       const authedId = authed?.id != null ? String(authed.id) : undefined
-  
+
       // Reconnect path: if this user is the host (by userId), always assign hostToken and seat 0 so host auth survives reconnect.
       if (authedId && room.hostUserId != null && authedId === room.hostUserId) {
+        hostReconnected = true
         token = room.hostToken
         room.tokenUserId.set(token, authedId)
         const at0 = room.seatToken.get(0)
@@ -548,7 +551,7 @@ async function bootstrap(): Promise<void> {
         for (const [s, uid] of room.seatUserId.entries()) {
           if (uid === authedId) {
             const existing = room.seatToken.get(s)
-            if (existing) token = existing
+            if (existing) { token = existing; reclaimedSeat = true }
             break
           }
         }
@@ -581,7 +584,12 @@ async function bootstrap(): Promise<void> {
         const chosenName = (authed?.username || payload.name || `Player ${seat + 1}`).trim()
         room.state = reducer(room.state, { type: 'SET_NAME', playerIndex: seat, name: chosenName })
       }
-  
+
+      if (seat !== null && !hostReconnected && !reclaimedSeat) {
+        const displayName = room.state.players[seat]?.name ?? `Player ${seat + 1}`
+        emitSystem(code, room, `${displayName} joined the table (Seat ${seat + 1}).`)
+      }
+
       console.log('[ROOM] join room=%s token=%s seat=%s userId=%s isHost=%s', code, token.slice(0, 8) + '…', seat, authedId ?? 'anonymous', isHost(room, token))
       emitRoomState(room)
       cb?.({ ok: true, roomCode: code, token, playerIndex: seat, isHost: isHost(room, token) })
@@ -765,12 +773,37 @@ async function bootstrap(): Promise<void> {
         cb?.({ ok: false, error: 'Not in room' })
         return
       }
+      const seat = room.tokenSeat.get(token)
+      const leaveName = (seat != null && room.state.players[seat]?.name) ? room.state.players[seat].name : null
       detachSocket(room, socket.id)
       socket.leave(code)
       emitRoomState(room)
+      emitSystem(code, room, leaveName ? `${leaveName} left the table.` : 'A player left the table.')
       console.log('[ROOM] room:leave success userId=%s roomCode=%s', userId, code)
       cb?.({ ok: true })
     })
+
+    type ChatMsg = { id: string; ts: number; userId: number | null; name: string; text: string }
+    function addChatMessage(room: Room, message: ChatMsg) {
+      room.chatMessages = room.chatMessages ?? []
+      room.chatMessages.push(message)
+      if (room.chatMessages.length > 50) room.chatMessages = room.chatMessages.slice(-50)
+    }
+    function makeSystemMessage(text: string): ChatMsg {
+      return {
+        id: `${Date.now()}-${Math.random()}`,
+        ts: Date.now(),
+        userId: null,
+        name: 'System',
+        text,
+      }
+    }
+    function emitSystem(roomCode: string, room: Room, text: string) {
+      const msg = makeSystemMessage(text)
+      addChatMessage(room, msg)
+      io.to(roomCode).emit('chat:message', { roomCode, message: msg })
+      console.log('[CHAT] system room=%s text=%s', roomCode, text)
+    }
 
     socket.on('chat:send', (payload: { roomCode: string; text: string }, cb?: (resp: any) => void) => {
       const code = (payload.roomCode || '').toUpperCase().trim()

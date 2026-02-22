@@ -99,6 +99,17 @@ export default function ChatPanel(props: ChatPanelProps) {
         ) : (
           <div style={{ padding: '0 12px' }}>
             {messages.map((msg) => {
+              const isSystem = msg.name === 'System'
+              if (isSystem) {
+                return (
+                  <div
+                    key={msg.id}
+                    style={{ fontSize: 13, color: '#555', fontStyle: 'italic', textAlign: 'center', padding: '6px 0' }}
+                  >
+                    {msg.text}
+                  </div>
+                )
+              }
               const isSelf = msg.name === 'You'
               const timeString = formatTime(msg.ts)
               return (
