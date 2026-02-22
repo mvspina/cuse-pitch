@@ -4,6 +4,8 @@ import { cardKey, currentHighBid, suitLabel, suitSymbol } from '../engine/game'
 import type { Action, BidKind, Card, GameSettings, GameState, Suit } from '../engine/types'
 import LeaderboardPanel from './LeaderboardPanel'
 
+type LeaderboardRow = { userId: number; name: string; games: number; wins: number; losses: number; winPct: number }
+
 const suitOptions: Suit[] = ['S','H','D','C']
 const TOKEN_KEY = 'cuse-pitch-token'
 const ROOM_KEY = 'cuse-pitch-room'
@@ -328,6 +330,10 @@ export default function App() {
 
   const [homeBusy, setHomeBusy] = useState<null | 'create' | 'join'>(null)
   const [homeToast, setHomeToast] = useState<string | null>(null)
+  const [leaderboardRows, setLeaderboardRows] = useState<LeaderboardRow[]>([])
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false)
+  const [leaderboardError, setLeaderboardError] = useState<string | null>(null)
+  const leaderboardFetchedRef = useRef(false)
   const [bidSuit, setBidSuit] = useState<Suit>('S')
   const [showHistory, setShowHistory] = useState(false)
   const [showPlayers, setShowPlayers] = useState(false)
@@ -655,6 +661,46 @@ const prevPlaysLenRef = useRef<number>(0)
   const nameValid = nameTrim.length >= 1 && nameTrim.length <= 18
   const normalizedJoinCode = (joinCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
   const joinCodeValid = normalizedJoinCode.length >= 4 && normalizedJoinCode.length <= 8
+
+  function fetchLeaderboard() {
+    try {
+      if (!net.socket || !net.socket.connected) {
+        setLeaderboardError('Not connected')
+        setLeaderboardRows([])
+        return
+      }
+      setLeaderboardLoading(true)
+      setLeaderboardError(null)
+      net.socket.emit('leaderboard:get', { limit: 10 }, (resp: any) => {
+        try {
+          if (resp && resp.ok === true && Array.isArray(resp.rows)) {
+            setLeaderboardRows(resp.rows)
+            setLeaderboardError(null)
+          } else {
+            setLeaderboardRows([])
+            setLeaderboardError(resp?.error ?? 'Failed to load leaderboard')
+          }
+        } finally {
+          setLeaderboardLoading(false)
+        }
+      })
+    } catch {
+      setLeaderboardError('Failed to load leaderboard')
+      setLeaderboardRows([])
+      setLeaderboardLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (roomReady || !authUser) leaderboardFetchedRef.current = false
+  }, [roomReady, authUser])
+
+  useEffect(() => {
+    if (!authUser || roomReady || !net.socket?.connected) return
+    if (leaderboardFetchedRef.current) return
+    leaderboardFetchedRef.current = true
+    fetchLeaderboard()
+  }, [authUser, roomReady, net.socket?.connected])
 
   function showToast(msg: string) {
     setHomeToast(msg)
@@ -1367,11 +1413,10 @@ useEffect(() => {
 
               <div className="col">
                 <LeaderboardPanel
-                  rows={[
-                    { name: 'Alice', games: 24, wins: 16, losses: 8, winPct: 16 / 24 },
-                    { name: 'Bob', games: 18, wins: 10, losses: 8, winPct: 10 / 18 },
-                    { name: 'Charlie', games: 12, wins: 8, losses: 4, winPct: 8 / 12 },
-                  ]}
+                  rows={leaderboardRows.map(r => ({ name: r.name, games: r.games, wins: r.wins, losses: r.losses, winPct: r.winPct }))}
+                  loading={leaderboardLoading}
+                  error={leaderboardError}
+                  onRefresh={fetchLeaderboard}
                 />
               </div>
             </>
