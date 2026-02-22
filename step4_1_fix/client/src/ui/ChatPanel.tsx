@@ -18,6 +18,10 @@ export type ChatPanelProps = {
 
 const MAX_LENGTH = 200
 
+const messageStyle = {
+  animation: 'chatFadeIn 0.18s ease-out',
+}
+
 export default function ChatPanel(props: ChatPanelProps) {
   const { messages = [], onSend, disabled = false, title = 'Table Chat', loading = false, error = null } = props
   const [input, setInput] = useState('')
@@ -25,13 +29,13 @@ export default function ChatPanel(props: ChatPanelProps) {
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const shouldStickToBottomRef = useRef(true)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   function handleScroll() {
     const el = scrollRef.current
     if (!el) return
-    const threshold = 40
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    shouldStickToBottomRef.current = distanceFromBottom < threshold
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    shouldStickToBottomRef.current = isNearBottom
   }
 
   useEffect(() => {
@@ -48,12 +52,17 @@ export default function ChatPanel(props: ChatPanelProps) {
     }
   }, [messages.length])
 
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+
   const send = useCallback(() => {
     const trimmed = input.trim()
     if (disabled || !trimmed || !onSend) return
     const toSend = trimmed.slice(0, MAX_LENGTH)
     onSend(toSend)
     setInput('')
+    inputRef.current?.focus()
   }, [input, disabled, onSend])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -64,6 +73,13 @@ export default function ChatPanel(props: ChatPanelProps) {
   }
 
   return (
+    <>
+      <style>{`
+@keyframes chatFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+`}</style>
     <div className="card">
       <h2 style={{ margin: 0 }}>{title}</h2>
       {loading && (
@@ -110,6 +126,7 @@ export default function ChatPanel(props: ChatPanelProps) {
                       <div
                         key={gi}
                         style={{
+                          ...messageStyle,
                           textAlign: 'center',
                           fontSize: 12,
                           color: '#666',
@@ -123,7 +140,7 @@ export default function ChatPanel(props: ChatPanelProps) {
                   }
 
                   return (
-                    <div key={gi} style={{ marginBottom: 8 }}>
+                    <div key={gi} style={{ marginBottom: 8, ...messageStyle }}>
                       <div
                         style={{
                           fontWeight: 600,
@@ -166,6 +183,7 @@ export default function ChatPanel(props: ChatPanelProps) {
       </div>
       <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
         <input
+          ref={inputRef}
           type="text"
           className="small"
           value={input}
@@ -181,5 +199,6 @@ export default function ChatPanel(props: ChatPanelProps) {
         </button>
       </div>
     </div>
+    </>
   )
 }
