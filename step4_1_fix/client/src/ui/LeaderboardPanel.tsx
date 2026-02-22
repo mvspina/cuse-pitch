@@ -29,6 +29,9 @@ export default function LeaderboardPanel(props: LeaderboardPanelProps) {
           </button>
         ) : null}
       </div>
+      <div className="small" style={{ color: 'rgba(255,255,255,0.65)', marginTop: 4 }}>
+        Minimum 5 games to qualify. Ranked by Win% (ties by Games, then Wins).
+      </div>
       {error ? (
         <div className="small" style={{ color: '#c00', marginTop: 8 }}>
           {error}

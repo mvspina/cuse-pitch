@@ -3,6 +3,7 @@ import type { QueryResult } from 'pg'
 import { getPool } from '../db/pool'
 
 const MAX_PROCESSED_HAND_KEYS = 200
+const MIN_GAMES = 5
 
 console.log('[STATS] store=Postgres (player_stats)')
 
@@ -208,7 +209,7 @@ export type LeaderboardRow = {
   winPct: number
 }
 
-/** Top players by win percentage. Only players with games_played > 0. Limit clamped 1..25. */
+/** Top players by win percentage. Only players with games_played >= MIN_GAMES. Limit clamped 1..25. */
 export async function getLeaderboard(limit: number): Promise<LeaderboardRow[]> {
   const pool = getPool()
   const client = await pool.connect()
@@ -223,12 +224,12 @@ export async function getLeaderboard(limit: number): Promise<LeaderboardRow[]> {
       `SELECT ps.user_id, u.username, ps.games_played, ps.games_won
        FROM player_stats ps
        JOIN users u ON u.id = ps.user_id
-       WHERE ps.games_played > 0
+       WHERE ps.games_played >= $2
        ORDER BY (ps.games_won::float / NULLIF(ps.games_played, 0)) DESC,
                 ps.games_played DESC,
                 ps.games_won DESC
        LIMIT $1`,
-      [clampedLimit]
+      [clampedLimit, MIN_GAMES]
     )
     return res.rows.map((row) => {
       const games = Number(row.games_played) || 0
