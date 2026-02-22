@@ -343,6 +343,12 @@ export default function App() {
   const [lingerWinnerIndex, setLingerWinnerIndex] = useState<number | null>(null)
   const [lingerLeaderIndex, setLingerLeaderIndex] = useState<number | null>(null)
   const [lingerAnim, setLingerAnim] = useState<'hold'|'slide'>('hold')
+  const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 900)
+  useEffect(() => {
+    const onResize = () => setIsNarrow(window.innerWidth < 900)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   const mockChatInitial = useMemo(() => [
     { id: '1', ts: Date.now() - 60000, name: 'Alice', text: 'Good luck!' },
@@ -1448,8 +1454,14 @@ useEffect(() => {
 
       {roomReady && state ? (
         <>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap', marginTop: 12 }}>
-            <div style={{ flex: '1 1 520px', minWidth: 320 }}>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: isNarrow ? '1fr' : 'minmax(0, 1fr) 340px',
+            gap: 12,
+            alignItems: 'start',
+            marginTop: 12,
+          }}>
+            <div style={{ minWidth: 0 }}>
               <div className="card">
               <h2>Table</h2>
           <div className="hudBar">
@@ -1757,7 +1769,7 @@ useEffect(() => {
         </div>
       ) : null}
 
-
+              <div className="card">
 <hr />
 
               {state.phase === 'BIDDING' ? (
@@ -2137,8 +2149,9 @@ useEffect(() => {
                   <div key={i}>{m}</div>
                 ))}
               </div>
+              </div>
             </div>
-            <div style={{ flex: '0 0 320px', minWidth: 280 }}>
+            <div style={{ minWidth: 0 }}>
               <div className="card">
                 <ChatPanel
                   messages={mockMessages}
