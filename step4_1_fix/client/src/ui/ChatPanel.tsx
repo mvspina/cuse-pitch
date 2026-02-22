@@ -71,16 +71,47 @@ export default function ChatPanel(props: ChatPanelProps) {
           </div>
         ) : (
           <div style={{ padding: '0 12px' }}>
-            {messages.map((msg) => (
-              <div key={msg.id} style={{ marginBottom: 8 }}>
-                <span className="small" style={{ color: 'rgba(255,255,255,0.75)' }}>
-                  {formatTime(msg.ts)} <strong>{msg.name}</strong>:
-                </span>
-                <div className="small" style={{ marginLeft: 4, marginTop: 2, wordBreak: 'break-word' }}>
-                  {msg.text}
+            {messages.map((msg) => {
+              const isSelf = msg.name === 'You'
+              const timeString = formatTime(msg.ts)
+              return (
+                <div
+                  key={msg.id}
+                  style={{
+                    padding: '6px 8px',
+                    borderRadius: 8,
+                    background: isSelf ? 'rgba(59,130,246,0.10)' : 'transparent',
+                    marginBottom: 8,
+                  }}
+                >
+                  <div style={{
+                    display: 'flex',
+                    gap: 6,
+                    alignItems: 'baseline',
+                  }}>
+                    <span style={{
+                      fontSize: 11,
+                      color: '#888',
+                    }}>
+                      {timeString}
+                    </span>
+                    <span style={{
+                      fontWeight: 600,
+                      color: isSelf ? '#2563eb' : '#111',
+                    }}>
+                      {msg.name}:
+                    </span>
+                  </div>
+                  <div style={{
+                    fontSize: 14,
+                    color: '#222',
+                    wordBreak: 'break-word' as const,
+                  }}>
+                    {msg.text}
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>
