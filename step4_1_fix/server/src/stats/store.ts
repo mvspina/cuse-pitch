@@ -4,6 +4,8 @@ import { getPool } from '../db/pool'
 
 const MAX_PROCESSED_HAND_KEYS = 200
 
+console.log('[STATS] store=Postgres (player_stats)')
+
 interface PlayerStatsRow {
   user_id: number
   games_played: number
@@ -60,7 +62,7 @@ function defaultStats(userId: number): PersistedStats {
   }
 }
 
-export async function getStats(userId: number): Promise<PersistedStats | null> {
+export async function getStats(userId: number): Promise<PersistedStats> {
   const pool = getPool()
   const client = await pool.connect()
   try {
@@ -72,7 +74,7 @@ export async function getStats(userId: number): Promise<PersistedStats | null> {
       [userId]
     )
     const row = res.rows[0]
-    if (!row) return null
+    if (!row) return defaultStats(userId)
     const updatedAt = row.last_played_at ? new Date(row.last_played_at).toISOString() : ''
     const rawKeys = row.processed_hand_keys
     const processedHandKeys = Array.isArray(rawKeys) ? rawKeys : (rawKeys && typeof rawKeys === 'object' ? (Array.isArray((rawKeys as any)?.elements) ? (rawKeys as any).elements : []) : [])
@@ -110,7 +112,7 @@ export async function upsertAddGame(params: {
   const key = String(params.userId)
 
   const client = await pool.connect()
-  return (async () =>
+  return (async (): Promise<PersistedStats> =>
     client
       .query<PlayerStatsRow>(
         `SELECT user_id, games_played, games_won, bids_attempted, bids_made, stm_success,
@@ -126,7 +128,6 @@ export async function upsertAddGame(params: {
         let gamesPlayed = 0
         let gamesWon = 0
         let bidsAttempted = 0
-        let bidsMade = 0
         let stmSuccess = 0
 
         if (row) {
@@ -137,21 +138,18 @@ export async function upsertAddGame(params: {
           gamesPlayed = Number(row.games_played) || 0
           gamesWon = Number(row.games_won) || 0
           bidsAttempted = Number(row.bids_attempted) ?? 0
-          bidsMade = Number(row.bids_made) ?? 0
           stmSuccess = Number(row.stm_success) ?? 0
         }
 
         if (processedKeys.includes(params.handKey)) {
           console.log('[STATS] apply hand userId=%s handKey=%s skipped (already processed)', key, params.handKey)
           client.release()
-          const stats = await getStats(params.userId)
-          return stats ?? defaultStats(params.userId)
+          return getStats(params.userId)
         }
 
         const countAttempt = params.didAttempt && lastAttemptHandId !== params.handId ? 1 : 0
         const countMade = params.didMake && lastMadeHandId !== params.handId ? 1 : 0
         bidsAttempted = Math.max(0, bidsAttempted + countAttempt)
-        bidsMade = Math.max(0, Math.min(bidsMade + countMade, bidsAttempted))
         const nextProcessed = [...processedKeys, params.handKey].slice(-MAX_PROCESSED_HAND_KEYS)
         const nextBidAttemptHandId = countAttempt ? params.handId : lastAttemptHandId
         const nextBidMadeHandId = countMade ? params.handId : lastMadeHandId
@@ -162,41 +160,35 @@ export async function upsertAddGame(params: {
               user_id, games_played, games_won, hands_played, hands_won, bids_made, bids_won,
               bids_attempted, stm_success, last_played_at, processed_hand_keys,
               last_bid_attempt_hand_id, last_bid_made_hand_id
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10::jsonb, $11, $12)
+            ) VALUES ($1, $2, $3, $4, $5, 0, 0, $6, $7, now(), $8::jsonb, $9, $10)
             ON CONFLICT (user_id) DO UPDATE SET
               games_played = player_stats.games_played + $2,
               games_won = player_stats.games_won + $3,
               hands_played = player_stats.hands_played + 1,
-              hands_won = player_stats.hands_won + $13,
-              bids_made = player_stats.bids_made + $6,
-              bids_won = player_stats.bids_won + $7,
-              bids_attempted = player_stats.bids_attempted + $8,
-              stm_success = player_stats.stm_success + $9,
+              hands_won = player_stats.hands_won + $5,
+              bids_attempted = player_stats.bids_attempted + $6,
+              stm_success = player_stats.stm_success + $7,
               last_played_at = now(),
-              processed_hand_keys = $10::jsonb,
-              last_bid_attempt_hand_id = COALESCE($11, player_stats.last_bid_attempt_hand_id),
-              last_bid_made_hand_id = COALESCE($12, player_stats.last_bid_made_hand_id)`,
+              processed_hand_keys = $8::jsonb,
+              last_bid_attempt_hand_id = COALESCE($9, player_stats.last_bid_attempt_hand_id),
+              last_bid_made_hand_id = COALESCE($10, player_stats.last_bid_made_hand_id)`,
             [
               params.userId,
               1,
               params.didWin ? 1 : 0,
               1,
               countMade,
-              countMade,
-              countMade,
               countAttempt,
               Math.max(0, params.stmSuccess ?? 0),
               JSON.stringify(nextProcessed),
               nextBidAttemptHandId,
               nextBidMadeHandId,
-              countMade,
             ]
           )
           .then(async () => {
             client.release()
-            console.log('[STATS] update userId=%s handKey=%s didWin=%s bidsAttempted+=%s bidsMade+=%s', key, params.handKey, params.didWin, countAttempt, countMade)
-            const stats = await getStats(params.userId)
-            return stats ?? defaultStats(params.userId)
+            console.log('[STATS] update userId=%s handKey=%s didWin=%s bidsAttempted+=%s', key, params.handKey, params.didWin, countAttempt)
+            return getStats(params.userId)
           })
       })
       .catch((err: unknown) => {
@@ -205,4 +197,53 @@ export async function upsertAddGame(params: {
         throw err
       })
   )()
+}
+
+/** Persist bids_made (one per bidder per hand) and bids_won (one per hand for winner). Idempotent via hand_bid_made/hand_bid_winner unique constraints. */
+export async function persistBidsForHand(params: {
+  roomCode: string
+  handKey: string
+  biddersUserId: number[]
+  winnerUserId: number | null
+}): Promise<void> {
+  const { roomCode, handKey, biddersUserId, winnerUserId } = params
+  const pool = getPool()
+  const client = await pool.connect()
+  try {
+    let biddersCount = 0
+    for (const userId of biddersUserId) {
+      const res = await client.query(
+        `INSERT INTO hand_bid_made (user_id, hand_key) VALUES ($1, $2)
+         ON CONFLICT (user_id, hand_key) DO NOTHING RETURNING user_id`,
+        [userId, handKey]
+      )
+      if (res.rowCount && res.rowCount > 0) {
+        await client.query(
+          `INSERT INTO player_stats (user_id, games_played, games_won, hands_played, hands_won, bids_made, bids_won, trump_calls, points_for, points_against, bids_attempted, stm_success, processed_hand_keys)
+           VALUES ($1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, '[]'::jsonb)
+           ON CONFLICT (user_id) DO UPDATE SET bids_made = player_stats.bids_made + 1`,
+          [userId]
+        )
+        biddersCount++
+      }
+    }
+    if (winnerUserId != null) {
+      const res = await client.query(
+        `INSERT INTO hand_bid_winner (hand_key, user_id) VALUES ($1, $2)
+         ON CONFLICT (hand_key) DO NOTHING RETURNING user_id`,
+        [handKey, winnerUserId]
+      )
+      if (res.rowCount && res.rowCount > 0) {
+        await client.query(
+          `INSERT INTO player_stats (user_id, games_played, games_won, hands_played, hands_won, bids_made, bids_won, trump_calls, points_for, points_against, bids_attempted, stm_success, processed_hand_keys)
+           VALUES ($1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, '[]'::jsonb)
+           ON CONFLICT (user_id) DO UPDATE SET bids_won = player_stats.bids_won + 1`,
+          [winnerUserId]
+        )
+      }
+    }
+    console.log('[STATS] bids persisted room=%s handKey=%s biddersCount=%s winnerUserId=%s', roomCode, handKey, biddersCount, winnerUserId ?? 'null')
+  } finally {
+    client.release()
+  }
 }

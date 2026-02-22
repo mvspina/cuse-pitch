@@ -51,3 +51,33 @@ curl -s -w "\nHTTP code: %{http_code}\n" https://syracuse-pitch.fly.dev/healthz
 ```
 
 Expected: JSON body (e.g. `{"ok":true,...}`) and `HTTP code: 200`.
+
+---
+
+## 4) Postgres verification (after TS2322 fix / Postgres stats deploy)
+
+Confirm `DATABASE_URL` is set on the app without printing secrets:
+
+```bash
+fly ssh console --app syracuse-pitch -C "sh -lc 'printenv | grep -q \"^DATABASE_URL=\" && echo DATABASE_URL_SET || echo DATABASE_URL_MISSING'"
+```
+
+Expected: `DATABASE_URL_SET`.
+
+Hit `/healthz` and show status code and headers:
+
+```bash
+curl -i https://syracuse-pitch.fly.dev/healthz
+```
+
+Expected: `200` when DB is reachable; `503` with `db_unreachable` when DB is down.
+
+**Logs to look for after deploy:**
+
+- Migration lines: `[DB] migration ran: users`, `[DB] migration ran: session`, `[DB] migration ran: player_stats`, `[DB] migration ran: password_resets`
+- Server listening: `Server listening on http://0.0.0.0:3000` (or your configured HOST:PORT)
+- Postgres stats store: `[STATS] store=Postgres (player_stats)`
+
+```bash
+fly logs --app syracuse-pitch
+```

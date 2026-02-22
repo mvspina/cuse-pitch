@@ -665,6 +665,20 @@ body{
 .btn.danger{ background:#e44; color:#fff; border-color:transparent;}
 
 /* Players modal */
+.playersModalWrap{
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+}
+.playersModalWrap > .modalBackdrop{
+  pointer-events: auto;
+  z-index: 50;
+}
+.playersModalWrap > .playersModal{
+  pointer-events: auto;
+  z-index: 51;
+}
 .modalBackdrop{
   position:fixed;
   inset:0;

@@ -15,12 +15,17 @@ import { buildAuthRouter } from './auth/routes'
 import { getUserById } from './auth/db'
 import type { SessionUser } from './auth/db'
 
-import { getStats, upsertAddGame, computeBidRate } from './stats/store'
+import { getStats, upsertAddGame, computeBidRate, persistBidsForHand } from './stats/store'
 
 type Room = {
   code: string
   state: GameState
   settings: GameSettings
+
+  // Stable hand key for current hand (set at START_HAND); used for bid persistence.
+  currentHandKey: string | null
+  // Incremented when entering SETUP after a game end; used in currentHandKey.
+  gameSeq: number
 
   // Seat ownership
   seatToken: Map<number, string>          // seatIndex -> token
@@ -159,12 +164,13 @@ async function bootstrap(): Promise<void> {
     }
     console.log('[STATS] profile stats requested userId=%s', user.id)
     const stats = await getStats(user.id)
-    const gamesPlayed = stats?.gamesPlayed ?? 0
-    const wins = stats?.wins ?? 0
-    const losses = stats?.losses ?? 0
-    const bidsAttempted = stats?.bidsAttempted ?? Math.max(stats?.bidsMade ?? 0, stats?.bidsWon ?? 0)
-    const bidsMade = stats?.bidsMade ?? 0
-    const stmSuccess = stats?.stmSuccess ?? 0
+    const gamesPlayed = stats.gamesPlayed ?? 0
+    const wins = stats.wins ?? 0
+    const losses = stats.losses ?? 0
+    const bidsAttempted = stats.bidsAttempted ?? Math.max(stats.bidsMade ?? 0, stats.bidsWon ?? 0)
+    const bidsMade = stats.bidsMade ?? 0
+    const bidsWon = stats.bidsWon ?? 0
+    const stmSuccess = stats.stmSuccess ?? 0
 
     const winPct = gamesPlayed > 0 ? Math.min(1, Math.max(0, wins / gamesPlayed)) : 0
     const bidWinPct = computeBidRate(bidsAttempted, bidsMade)
@@ -182,11 +188,10 @@ async function bootstrap(): Promise<void> {
         winPct,
         bidsAttempted,
         bidsMade,
+        bidsWon,
         bidWinPct,
         stmSuccess,
-        updatedAt: stats?.updatedAt ?? null,
-        /** @deprecated Use bidsAttempted. Kept for client compat. */
-        bidsWon: bidsAttempted,
+        updatedAt: stats.updatedAt ?? null,
       },
     })
   })
@@ -288,6 +293,8 @@ async function bootstrap(): Promise<void> {
       code,
       state,
       settings,
+      currentHandKey: null,
+      gameSeq: 1,
       seatToken: new Map(),
       tokenSeat: new Map(),
       seatUserId: new Map(),
@@ -779,12 +786,24 @@ async function bootstrap(): Promise<void> {
       }
       if (room.state.phase !== 'SETUP') { cb?.({ ok: false, error: 'Kick only in Setup' }); return }
       if (payload.seat === 0) { cb?.({ ok: false, error: 'Cannot kick host' }); return }
-  
+
       const seatToken = room.seatToken.get(payload.seat)
+      const targetUserId = room.seatUserId.get(payload.seat) ?? null
+      const hostUserId = room.hostUserId ?? room.tokenUserId.get(payload.token) ?? null
+      console.log('[KICK] requested by hostUserId=%s targetUserId=%s room=%s', hostUserId, targetUserId, code)
+
       if (seatToken) {
         room.seatToken.delete(payload.seat)
-      room.rematchReady.delete(payload.seat)
+        room.rematchReady.delete(payload.seat)
         room.tokenSeat.delete(seatToken)
+        room.seatUserId.delete(payload.seat)
+        const kickedSocketIds = room.socketsByToken.get(seatToken)
+        if (kickedSocketIds) {
+          for (const sid of kickedSocketIds) {
+            const sock = io.sockets.sockets.get(sid)
+            if (sock) sock.emit('kicked')
+          }
+        }
       }
       emitRoomState(room)
       cb?.({ ok: true })
@@ -816,7 +835,8 @@ async function bootstrap(): Promise<void> {
       }
   
       if (allReady) {
-        // preserve names for occupied seats
+        room.gameSeq += 1
+        room.currentHandKey = null
         const names: string[] = room.state.players.map(p => p.name)
         room.state = newGame(room.settings, [])
         room.rematchReady.clear()
@@ -841,8 +861,9 @@ async function bootstrap(): Promise<void> {
         console.log('[ROOM] host-only denied hostReset room=%s userId=%s hostUserId=%s', code, getSocketUserId(socket) ?? room.tokenUserId.get(payload.token), room.hostUserId)
         cb?.({ ok: false, error: 'Host only' }); return
       }
-  
-      // preserve names for occupied seats
+
+      room.gameSeq += 1
+      room.currentHandKey = null
       const names: string[] = room.state.players.map(p => p.name)
       room.state = newGame(room.settings, [])
       room.rematchReady.clear()
@@ -853,7 +874,7 @@ async function bootstrap(): Promise<void> {
           room.state = reducer(room.state, { type: 'SET_NAME', playerIndex: i, name: nm })
         }
       }
-  
+
       emitRoomState(room)
       cb?.({ ok: true })
     })
@@ -893,17 +914,16 @@ async function bootstrap(): Promise<void> {
       if (room.state.phase !== 'SETUP') { cb?.({ ok: false, error: 'Settings only in Setup' }); return }
   
       room.settings = payload.settings
-  
-      // Reset seating to match new player count
+      room.gameSeq += 1
+      room.currentHandKey = null
+
       const oldSeatToken = new Map(room.seatToken)
       room.seatToken.clear()
       room.tokenSeat.clear()
-  
-      // Host keeps seat 0
+
       room.seatToken.set(0, room.hostToken)
       room.tokenSeat.set(room.hostToken, 0)
-  
-      // Recreate game
+
       room.state = newGame(payload.settings, [])
       room.state = reducer(room.state, { type: 'SET_NAME', playerIndex: 0, name: room.state.players[0].name })
   
@@ -943,18 +963,47 @@ async function bootstrap(): Promise<void> {
         const prevState = room.state
         const nextState = reducer(room.state, payload.action)
         room.state = nextState
-  
-        if (payload.action.type === 'START_HAND') {
-          console.log('[ROOM] game start hand room=%s handNumber=%s seatUserId size=%s', code, nextState.handNumber, room.seatUserId.size)
+
+        if (prevState.phase === 'GAME_END' && nextState.phase === 'SETUP') {
+          room.gameSeq += 1
         }
-  
+
+        if (payload.action.type === 'START_HAND') {
+          room.currentHandKey = `${code}:${room.gameSeq}:${nextState.handNumber}`
+          console.log('[HAND] start room=%s handKey=%s dealer=%s handNumber=%s', code, room.currentHandKey, nextState.dealerIndex, nextState.handNumber)
+        }
+
+        if (payload.action.type === 'PLACE_BID' && payload.action.bid !== 'PASS') {
+          const bidderSeat = prevState.currentBidderIndex
+          const userId = bidderSeat != null ? room.seatUserId.get(bidderSeat) : undefined
+          console.log('[BID] made room=%s handKey=%s userId=%s', code, room.currentHandKey ?? '', userId ?? 'anonymous')
+        }
+
+        if (prevState.phase === 'BIDDING' && (nextState.phase === 'DEALER_TRUMP' || nextState.phase === 'DISCARD')) {
+          const handKey = room.currentHandKey ?? `${code}:${room.gameSeq}:${nextState.handNumber}`
+          const nonPass = nextState.bidHistory.filter(b => b.bid !== 'PASS')
+          const biddersUserId = [...new Set(nonPass.map(b => room.seatUserId.get(b.playerIndex))).values()]
+            .filter((u): u is string => u != null && u !== '')
+            .map(u => Number(u))
+            .filter(n => Number.isFinite(n))
+          const winnerSeat = nextState.bidWinnerIndex
+          const winnerUserId = winnerSeat != null ? room.seatUserId.get(winnerSeat) : undefined
+          const winnerId = winnerUserId != null && winnerUserId !== '' ? Number(winnerUserId) : null
+          if (Number.isFinite(winnerId)) {
+            console.log('[BID] winner room=%s handKey=%s userId=%s bid=%s', code, handKey, winnerId, nextState.winningBid ?? '')
+          }
+          persistBidsForHand({ roomCode: code, handKey, biddersUserId, winnerUserId: Number.isFinite(winnerId) ? winnerId : null }).catch((err) =>
+            console.error('[STATS] persistBidsForHand failed:', err instanceof Error ? err.message : err)
+          )
+        }
+
         // Step 3: Persist per-user lifetime stats exactly once when the server authoritative
         // reducer transitions into GAME_END (team reaches/surpasses target score).
         // Keys use stable userId (from session / seatUserId), not socketId or username.
         if (prevState.phase !== 'GAME_END' && nextState.phase === 'GAME_END' && nextState.winnerTeamId) {
           const winnerTeamId = nextState.winnerTeamId
           const seenUserIds = new Set<string>()
-          const handKey = `${code}:${nextState.handNumber}:${nextState.teams.map(t => t.score).sort().join(',')}:${winnerTeamId}`
+          const handKey = room.currentHandKey ?? `${code}:${room.gameSeq}:${nextState.handNumber}:${winnerTeamId}`
           const handId = nextState.handId ?? handKey
           const lastResult = nextState.lastHandResult
           const bidderSeat = lastResult?.bidderPlayerIndex ?? null

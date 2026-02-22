@@ -64,6 +64,28 @@ const MIGRATIONS: { name: string; sql: string }[] = [
       CREATE INDEX IF NOT EXISTS idx_password_resets_expires_at ON password_resets (expires_at);
     `.trim(),
   },
+  {
+    name: 'hand_bid_made',
+    sql: `
+      CREATE TABLE IF NOT EXISTS hand_bid_made (
+        user_id bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        hand_key text NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        UNIQUE(user_id, hand_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_hand_bid_made_hand_key ON hand_bid_made (hand_key);
+    `.trim(),
+  },
+  {
+    name: 'hand_bid_winner',
+    sql: `
+      CREATE TABLE IF NOT EXISTS hand_bid_winner (
+        hand_key text PRIMARY KEY,
+        user_id bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+    `.trim(),
+  },
 ]
 
 /** Run all migrations. Idempotent. Throws on any SQL error so process can crash and Fly restarts. */
@@ -75,8 +97,8 @@ export async function runMigrations(): Promise<void> {
       try {
         await client.query(m.sql)
         console.log('[DB] migration ran: %s', m.name)
-      } catch (err: any) {
-        const msg = err?.message ?? String(err)
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
         console.error('[DB] migration failed: %s – %s', m.name, msg)
         throw new Error(`Migration "${m.name}" failed: ${msg}`)
       }

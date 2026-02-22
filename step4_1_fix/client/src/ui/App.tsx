@@ -230,6 +230,7 @@ type NetState = {
   rematchReady: boolean[]
   roomState: RoomStateSnapshot | null
   error: string | null
+  kickedMessage?: string
 }
 
 type AuthUser = {
@@ -615,9 +616,17 @@ const prevPlaysLenRef = useRef<number>(0)
         localStorage.removeItem(TOKEN_KEY)
       } catch {}
       setState(null)
-      setNet(n => ({ ...n, roomCode: null, token: null, playerIndex: null, isHost: false, occupied: [], roomState: null, error: payload?.message ?? 'Room ended' }))
+      setNet(n => ({ ...n, roomCode: '', token: '', playerIndex: null, isHost: false, occupied: [], roomState: null, error: payload?.message ?? 'Room ended' }))
     })
 
+    s.on('kicked', () => {
+      try {
+        localStorage.removeItem(ROOM_KEY)
+        localStorage.removeItem(TOKEN_KEY)
+      } catch {}
+      setState(null)
+      setNet(n => ({ ...n, roomCode: '', token: '', playerIndex: null, isHost: false, occupied: [], roomState: null, error: null, kickedMessage: 'You were removed from the game' }))
+    })
 
     return () => { s.disconnect() }
   }, [])
@@ -711,7 +720,7 @@ const prevPlaysLenRef = useRef<number>(0)
           localStorage.setItem(ROOM_KEY, resp.roomCode)
           localStorage.setItem(TOKEN_KEY, resp.token)
         } catch {}
-        setNet(n => ({ ...n, roomCode: resp.roomCode, token: resp.token, playerIndex: resp.playerIndex ?? n.playerIndex, isHost: true }))
+        setNet(n => ({ ...n, roomCode: resp.roomCode, token: resp.token, playerIndex: resp.playerIndex ?? n.playerIndex, isHost: true, kickedMessage: undefined }))
         // Ask server to push current state
         net.socket?.emit('reconnectRoom', { roomCode: resp.roomCode, token: resp.token }, () => {})
         setHomeBusy(null)
@@ -740,7 +749,7 @@ const prevPlaysLenRef = useRef<number>(0)
           localStorage.setItem(ROOM_KEY, resp.roomCode)
           localStorage.setItem(TOKEN_KEY, resp.token)
         } catch {}
-        setNet(n => ({ ...n, roomCode: resp.roomCode, token: resp.token, playerIndex: resp.playerIndex ?? n.playerIndex }))
+        setNet(n => ({ ...n, roomCode: resp.roomCode, token: resp.token, playerIndex: resp.playerIndex ?? n.playerIndex, kickedMessage: undefined }))
         net.socket?.emit('reconnectRoom', { roomCode: resp.roomCode, token: resp.token }, () => {})
         setHomeBusy(null)
       },
@@ -773,7 +782,7 @@ const prevPlaysLenRef = useRef<number>(0)
         localStorage.setItem(ROOM_KEY, resp.roomCode)
         localStorage.setItem(TOKEN_KEY, resp.token)
       } catch {}
-      setNet(n => ({ ...n, roomCode: resp.roomCode, token: resp.token, playerIndex: resp.playerIndex ?? n.playerIndex, isHost: !!resp.isHost }))
+      setNet(n => ({ ...n, roomCode: resp.roomCode, token: resp.token, playerIndex: resp.playerIndex ?? n.playerIndex, isHost: !!resp.isHost, kickedMessage: undefined }))
       s.emit('reconnectRoom', { roomCode: resp.roomCode, token: resp.token }, () => {})
       setPendingInviteCode(null)
       try {
@@ -804,7 +813,9 @@ const prevPlaysLenRef = useRef<number>(0)
 
   function hostKick(seat: number) {
     if (!net.roomCode || !net.token) return
-    rpc('hostKick', { roomCode: net.roomCode, token: net.token, seat })
+    rpc('hostKick', { roomCode: net.roomCode, token: net.token, seat }, (resp: { ok?: boolean; error?: string }) => {
+      if (resp?.ok === false) setNet(n => ({ ...n, error: resp?.error ?? 'Kick failed' }))
+    })
   }
 
   function hostReset() {
@@ -1129,6 +1140,12 @@ useEffect(() => {
 
       {!roomReady ? (
         <div className="row" style={{ marginTop: 12 }}>
+          {net.kickedMessage ? (
+            <div className="errorBox" style={{ marginBottom: 12 }}>
+              {net.kickedMessage}
+              <button type="button" className="btn small" style={{ marginLeft: 8 }} onClick={() => setNet(n => ({ ...n, kickedMessage: undefined }))}>Dismiss</button>
+            </div>
+          ) : null}
           {net.error ? (<div className="errorBox" style={{ marginBottom: 12 }}>{net.error}</div>) : null}
 
           <div className="bannerRow" style={{ marginBottom: 12 }}>
@@ -1590,7 +1607,7 @@ useEffect(() => {
 ) : null}
 
       {showPlayers ? (
-        <>
+        <div className="playersModalWrap">
           <div className="modalBackdrop" onClick={() => setShowPlayers(false)} />
           <div className="playersModal">
             <div className="playersModalHeader">
@@ -1599,7 +1616,7 @@ useEffect(() => {
             </div>
             <div className="playersModalBody">
               {state.players.map((p, i) => (
-                <div key={p.id} className="playersRow">
+                <div key={p.id} className="playersRow" style={{ pointerEvents: 'auto' }}>
                   <div className="playersRowLeft">
                     <div style={{ fontWeight: 800 }}>{playerName(i)}</div>
                     <div className="small" style={{ opacity: 0.85 }}>
@@ -1607,13 +1624,23 @@ useEffect(() => {
                     </div>
                   </div>
                   {net.isHost && i !== 0 ? (
-                    <button className="btn danger" onClick={() => send({ type: 'KICK_PLAYER', playerIndex: i })}>Kick</button>
+                    <button
+                      type="button"
+                      className="btn danger"
+                      style={{ position: 'relative', zIndex: 50, pointerEvents: 'auto' }}
+                      onClick={() => {
+                        console.log('[UI] Kick clicked seat=', i, 'isHost=', net.isHost)
+                        hostKick(i)
+                      }}
+                    >
+                      Kick
+                    </button>
                   ) : null}
                 </div>
               ))}
             </div>
           </div>
-        </>
+        </div>
       ) : null}
 
 
