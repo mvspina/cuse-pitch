@@ -16,13 +16,6 @@ export type ChatPanelProps = {
   error?: string | null
 }
 
-function formatTime(ts: number): string {
-  const d = new Date(ts)
-  const h = d.getHours()
-  const m = d.getMinutes()
-  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`
-}
-
 const MAX_LENGTH = 200
 
 export default function ChatPanel(props: ChatPanelProps) {
@@ -86,71 +79,89 @@ export default function ChatPanel(props: ChatPanelProps) {
           maxHeight: 200,
           overflowY: 'auto',
           marginTop: 8,
-          padding: '8px 0',
-          border: '1px solid rgba(255,255,255,0.2)',
-          borderRadius: 4,
-          background: 'rgba(0,0,0,0.15)',
+          background: '#f3f4f6',
+          borderRadius: 10,
+          padding: 8,
         }}
       >
         {!hasMessages ? (
-          <div className="small" style={{ padding: '8px 12px', color: 'rgba(255,255,255,0.7)' }}>
+          <div className="small" style={{ padding: '8px 12px', color: '#6b7280' }}>
             No messages yet.
           </div>
         ) : (
-          <div style={{ padding: '0 12px' }}>
-            {messages.map((msg) => {
-              const isSystem = msg.name === 'System'
-              if (isSystem) {
-                return (
-                  <div
-                    key={msg.id}
-                    style={{ fontSize: 13, color: '#555', fontStyle: 'italic', textAlign: 'center', padding: '6px 0' }}
-                  >
-                    {msg.text}
-                  </div>
-                )
+          (() => {
+            const grouped: { name: string; userId?: number | null; items: ChatMessage[] }[] = []
+            for (const msg of messages) {
+              const last = grouped[grouped.length - 1]
+              if (last && last.name === msg.name && msg.name !== 'System') {
+                last.items.push(msg)
+              } else {
+                grouped.push({ name: msg.name, userId: (msg as ChatMessage & { userId?: number | null }).userId, items: [msg] })
               }
-              const isSelf = msg.name === 'You'
-              const timeString = formatTime(msg.ts)
-              return (
-                <div
-                  key={msg.id}
-                  style={{
-                    padding: '6px 8px',
-                    borderRadius: 8,
-                    background: isSelf ? 'rgba(59,130,246,0.10)' : 'transparent',
-                    marginBottom: 8,
-                  }}
-                >
-                  <div style={{
-                    display: 'flex',
-                    gap: 6,
-                    alignItems: 'baseline',
-                  }}>
-                    <span style={{
-                      fontSize: 11,
-                      color: '#888',
-                    }}>
-                      {timeString}
-                    </span>
-                    <span style={{
-                      fontWeight: 600,
-                      color: isSelf ? '#2563eb' : '#111',
-                    }}>
-                      {msg.name}:
-                    </span>
-                  </div>
-                  <div style={{
-                    fontSize: 14,
-                    color: '#222',
-                    wordBreak: 'break-word' as const,
-                  }}>
-                    {msg.text}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+            }
+            return (
+              <div style={{ padding: '0 4px' }}>
+                {grouped.map((group, gi) => {
+                  const isSystem = group.name === 'System'
+                  const isSelf = group.name === 'You'
+
+                  if (isSystem) {
+                    return (
+                      <div
+                        key={gi}
+                        style={{
+                          textAlign: 'center',
+                          fontSize: 12,
+                          color: '#666',
+                          fontStyle: 'italic',
+                          padding: '6px 0',
+                        }}
+                      >
+                        {group.items[0].text}
+                      </div>
+                    )
+                  }
+
+                  return (
+                    <div key={gi} style={{ marginBottom: 8 }}>
+                      <div
+                        style={{
+                          fontWeight: 600,
+                          fontSize: 12,
+                          color: isSelf ? '#2563eb' : '#333',
+                          marginBottom: 2,
+                        }}
+                      >
+                        {group.name}
+                      </div>
+                      <div
+                        style={{
+                          background: isSelf ? 'rgba(37,99,235,0.12)' : 'rgba(0,0,0,0.06)',
+                          borderRadius: 8,
+                          padding: '6px 8px',
+                          display: 'inline-block',
+                          maxWidth: '100%',
+                        }}
+                      >
+                        {group.items.map((m, i) => (
+                          <div
+                            key={m.id}
+                            style={{
+                              lineHeight: 1.35,
+                              wordBreak: 'break-word' as const,
+                              ...(i > 0 ? { marginTop: 4 } : {}),
+                            }}
+                          >
+                            {m.text}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          })()
         )}
       </div>
       <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
