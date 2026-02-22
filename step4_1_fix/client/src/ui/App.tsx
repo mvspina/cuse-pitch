@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { io, Socket } from 'socket.io-client'
 import { cardKey, currentHighBid, suitLabel, suitSymbol } from '../engine/game'
 import type { Action, BidKind, Card, GameSettings, GameState, Suit } from '../engine/types'
+import LeaderboardPanel from './LeaderboardPanel'
 
 const suitOptions: Suit[] = ['S','H','D','C']
 const TOKEN_KEY = 'cuse-pitch-token'
@@ -1362,6 +1363,16 @@ useEffect(() => {
                     </button>
                   </div>
                 </div>
+              </div>
+
+              <div className="col">
+                <LeaderboardPanel
+                  rows={[
+                    { name: 'Alice', games: 24, wins: 16, losses: 8, winPct: 16 / 24 },
+                    { name: 'Bob', games: 18, wins: 10, losses: 8, winPct: 10 / 18 },
+                    { name: 'Charlie', games: 12, wins: 8, losses: 4, winPct: 8 / 12 },
+                  ]}
+                />
               </div>
             </>
           ) : (
