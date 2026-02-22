@@ -10,3 +10,5 @@ server/dist
 server/build-stamp.json
 client/dist
 .env
+backups/
+
