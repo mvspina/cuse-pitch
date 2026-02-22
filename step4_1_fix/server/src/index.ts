@@ -15,7 +15,7 @@ import { buildAuthRouter } from './auth/routes'
 import { getUserById } from './auth/db'
 import type { SessionUser } from './auth/db'
 
-import { getStats, upsertAddGame, computeBidRate, persistBidsForHand } from './stats/store'
+import { getStats, getLeaderboard, upsertAddGame, computeBidRate, persistBidsForHand } from './stats/store'
 
 type Room = {
   code: string
@@ -764,6 +764,25 @@ async function bootstrap(): Promise<void> {
       emitRoomState(room)
       console.log('[ROOM] room:leave success userId=%s roomCode=%s', userId, code)
       cb?.({ ok: true })
+    })
+
+    socket.on('leaderboard:get', async (payload: { limit?: number }, cb?: (resp: any) => void) => {
+      const userId = getSocketUserId(socket)
+      if (!userId) {
+        cb?.({ ok: false, error: 'unauthorized' })
+        return
+      }
+      const limit = Math.min(25, Math.max(1, payload?.limit ?? 10))
+      console.log('[STATS] leaderboard requested userId=%s limit=%s', userId, limit)
+      try {
+        const rows = await getLeaderboard(limit)
+        console.log('[STATS] leaderboard success count=%s', rows.length)
+        cb?.({ ok: true, rows })
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error('[STATS] leaderboard failed error=%s', msg)
+        cb?.({ ok: false, error: 'leaderboard failed' })
+      }
     })
 
     socket.on('takeSeat', (payload: { roomCode: string, token: string, seat: number, name?: string }, cb?: (resp: any) => void) => {

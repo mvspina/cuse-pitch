@@ -199,6 +199,57 @@ export async function upsertAddGame(params: {
   )()
 }
 
+export type LeaderboardRow = {
+  userId: number
+  name: string
+  games: number
+  wins: number
+  losses: number
+  winPct: number
+}
+
+/** Top players by win percentage. Only players with games_played > 0. Limit clamped 1..25. */
+export async function getLeaderboard(limit: number): Promise<LeaderboardRow[]> {
+  const pool = getPool()
+  const client = await pool.connect()
+  const clampedLimit = Math.min(25, Math.max(1, limit))
+  try {
+    const res = await client.query<{
+      user_id: string
+      username: string | null
+      games_played: string
+      games_won: string
+    }>(
+      `SELECT ps.user_id, u.username, ps.games_played, ps.games_won
+       FROM player_stats ps
+       JOIN users u ON u.id = ps.user_id
+       WHERE ps.games_played > 0
+       ORDER BY (ps.games_won::float / NULLIF(ps.games_played, 0)) DESC,
+                ps.games_played DESC,
+                ps.games_won DESC
+       LIMIT $1`,
+      [clampedLimit]
+    )
+    return res.rows.map((row) => {
+      const games = Number(row.games_played) || 0
+      const wins = Number(row.games_won) || 0
+      const losses = games - wins
+      const winPct = games > 0 ? wins / games : 0
+      const name = (row.username && String(row.username).trim()) ? String(row.username).trim() : `User ${row.user_id}`
+      return {
+        userId: Number(row.user_id),
+        name,
+        games,
+        wins,
+        losses,
+        winPct,
+      }
+    })
+  } finally {
+    client.release()
+  }
+}
+
 /** Persist bids_made (one per bidder per hand) and bids_won (one per hand for winner). Idempotent via hand_bid_made/hand_bid_winner unique constraints. */
 export async function persistBidsForHand(params: {
   roomCode: string
