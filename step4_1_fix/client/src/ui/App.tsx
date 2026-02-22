@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { io, Socket } from 'socket.io-client'
 import { cardKey, currentHighBid, suitLabel, suitSymbol } from '../engine/game'
 import type { Action, BidKind, Card, GameSettings, GameState, Suit } from '../engine/types'
 import LeaderboardPanel from './LeaderboardPanel'
+import ChatPanel from './ChatPanel'
 
 type LeaderboardRow = { userId: number; name: string; games: number; wins: number; losses: number; winPct: number }
 
@@ -342,6 +343,20 @@ export default function App() {
   const [lingerWinnerIndex, setLingerWinnerIndex] = useState<number | null>(null)
   const [lingerLeaderIndex, setLingerLeaderIndex] = useState<number | null>(null)
   const [lingerAnim, setLingerAnim] = useState<'hold'|'slide'>('hold')
+
+  const mockChatInitial = useMemo(() => [
+    { id: '1', ts: Date.now() - 60000, name: 'Alice', text: 'Good luck!' },
+    { id: '2', ts: Date.now() - 30000, name: 'Bob', text: 'What are we playing to?' },
+  ], [])
+  const [mockMessages, setMockMessages] = useState<Array<{ id: string; ts: number; name: string; text: string }>>(mockChatInitial)
+  const handleMockChatSend = useCallback((text: string) => {
+    const trimmed = text.trim().slice(0, 200)
+    if (!trimmed) return
+    setMockMessages(prev => {
+      const next = [...prev, { id: `${Date.now()}-${Math.random()}`, ts: Date.now(), name: 'You', text: trimmed }]
+      return next.length > 50 ? next.slice(-50) : next
+    })
+  }, [])
 
   const apiBase = useMemo(() => {
     return window.location.origin
@@ -1435,7 +1450,7 @@ useEffect(() => {
         <>
           
 
-          <div className="row" style={{ marginTop: 12 }}>
+          <div className="row" style={{ marginTop: 12, flexWrap: 'wrap' }}>
             <div className="col">
 <div className="card">
               <h2>Table</h2>
@@ -1702,6 +1717,14 @@ useEffect(() => {
       )}
     </div>
     <hr />
+            <div className="col">
+              <ChatPanel
+                messages={mockMessages}
+                onSend={handleMockChatSend}
+                title="Table Chat"
+              />
+            </div>
+          </div>
   </>
 ) : null}
 
