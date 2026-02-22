@@ -519,7 +519,6 @@ async function bootstrap(): Promise<void> {
 
       let token = payload.token && payload.token.length > 10 ? payload.token : genToken()
       let hostReconnected = false
-      let reclaimedSeat = false
 
       const authed = (socket.data as any).user as SessionUser | null
       const authedId = authed?.id != null ? String(authed.id) : undefined
@@ -551,7 +550,7 @@ async function bootstrap(): Promise<void> {
         for (const [s, uid] of room.seatUserId.entries()) {
           if (uid === authedId) {
             const existing = room.seatToken.get(s)
-            if (existing) { token = existing; reclaimedSeat = true }
+            if (existing) token = existing
             break
           }
         }
@@ -585,9 +584,12 @@ async function bootstrap(): Promise<void> {
         room.state = reducer(room.state, { type: 'SET_NAME', playerIndex: seat, name: chosenName })
       }
 
-      if (seat !== null && !hostReconnected && !reclaimedSeat) {
-        const displayName = room.state.players[seat]?.name ?? `Player ${seat + 1}`
-        emitSystem(code, room, `${displayName} joined the table (Seat ${seat + 1}).`)
+      // Emit join message on every successful join (including rejoin after leave), but not on host reconnect.
+      if (seat !== null && !hostReconnected) {
+        const resolvedName = room.state.players[seat]?.name
+        const displayName = resolvedName || (payload.name && payload.name.trim()) || 'Player'
+        const seatHuman = seat + 1
+        emitSystem(code, room, `${displayName} joined the table (Seat ${seatHuman}).`)
       }
 
       console.log('[ROOM] join room=%s token=%s seat=%s userId=%s isHost=%s', code, token.slice(0, 8) + '…', seat, authedId ?? 'anonymous', isHost(room, token))
