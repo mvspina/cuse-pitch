@@ -866,6 +866,42 @@ const prevPlaysLenRef = useRef<number>(0)
     })
   }
 
+  function clearRoomAndGoToLobby() {
+    try {
+      localStorage.removeItem(ROOM_KEY)
+      localStorage.removeItem(TOKEN_KEY)
+    } catch {}
+    setState(null)
+    setNet(n => ({
+      ...n,
+      roomCode: '',
+      token: '',
+      playerIndex: null,
+      isHost: false,
+      occupied: [],
+      rematchReady: [],
+      roomState: null,
+      error: null,
+      kickedMessage: undefined,
+    }))
+  }
+
+  function leaveRoomToLobby() {
+    if (!net.roomCode) return
+    if (!window.confirm('Leave this table and return to the lobby?')) return
+    if (!net.connected || !net.socket) {
+      clearRoomAndGoToLobby()
+      return
+    }
+    net.socket.emit('leaveRoom', { roomCode: net.roomCode }, (resp: any) => {
+      if (resp?.ok) {
+        clearRoomAndGoToLobby()
+      } else {
+        showToast(resp?.error ?? 'Could not leave room')
+      }
+    })
+  }
+
   function hostUpdateSettings(next: GameSettings) {
     if (!net.roomCode || !net.token) return
     rpc('hostUpdateSettings', { roomCode: net.roomCode, token: net.token, settings: next })
@@ -1126,10 +1162,17 @@ useEffect(() => {
         <div className="small" style={{ color: 'rgba(255,255,255,0.92)' }}>
           Cuse rules multiplayer pitch.
         </div>
-        <div className="small" style={{ color: 'rgba(255,255,255,0.92)', marginTop: 6 }}>
-          Socket: <strong>{net.connected ? 'Connected' : 'Disconnected'}</strong>
-          {roomReady ? <> | Room: <strong>{net.roomCode}</strong> | You: <strong>{net.playerIndex !== null ? playerName(net.playerIndex) : 'Spectator'}</strong></> : null}
-          {net.isHost ? <> | <strong>Host</strong></> : null}
+        <div className="small" style={{ color: 'rgba(255,255,255,0.92)', marginTop: 6, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span>
+            Socket: <strong>{net.connected ? 'Connected' : 'Disconnected'}</strong>
+            {roomReady ? <> | Room: <strong>{net.roomCode}</strong> | You: <strong>{net.playerIndex !== null ? playerName(net.playerIndex) : 'Spectator'}</strong></> : null}
+            {net.isHost ? <> | <strong>Host</strong></> : null}
+          </span>
+          {roomReady && !net.isHost ? (
+            <button type="button" className="btn small" onClick={leaveRoomToLobby}>
+              Return to Lobby
+            </button>
+          ) : null}
         </div>
         {net.error ? (
           <div className="small" style={{ color: '#ffd1d1', marginTop: 6 }}>

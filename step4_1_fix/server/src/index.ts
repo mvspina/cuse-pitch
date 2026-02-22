@@ -737,7 +737,35 @@ async function bootstrap(): Promise<void> {
   
       cb?.({ ok: true, roomCode: code, token, playerIndex: seat, isHost: isHost(room, token) })
     })
-  
+
+    socket.on('leaveRoom', (payload: { roomCode: string }, cb?: (resp: any) => void) => {
+      const code = (payload.roomCode || '').toUpperCase().trim()
+      const userId = getSocketUserId(socket) ?? 'anonymous'
+      console.log('[ROOM] room:leave userId=%s roomCode=%s socketId=%s', userId, code || '(empty)', socket.id)
+      if (!code) {
+        console.log('[ROOM] room:leave failed userId=%s roomCode=%s error=missing roomCode', userId, code)
+        cb?.({ ok: false, error: 'Room code required' })
+        return
+      }
+      const room = rooms.get(code)
+      if (!room) {
+        console.log('[ROOM] room:leave failed userId=%s roomCode=%s error=room not found', userId, code)
+        cb?.({ ok: false, error: 'Room not found' })
+        return
+      }
+      const token = room.tokenBySocketId.get(socket.id)
+      if (!token) {
+        console.log('[ROOM] room:leave failed userId=%s roomCode=%s error=not in room', userId, code)
+        cb?.({ ok: false, error: 'Not in room' })
+        return
+      }
+      detachSocket(room, socket.id)
+      socket.leave(code)
+      emitRoomState(room)
+      console.log('[ROOM] room:leave success userId=%s roomCode=%s', userId, code)
+      cb?.({ ok: true })
+    })
+
     socket.on('takeSeat', (payload: { roomCode: string, token: string, seat: number, name?: string }, cb?: (resp: any) => void) => {
       const code = (payload.roomCode || '').toUpperCase().trim()
       const room = rooms.get(code)
