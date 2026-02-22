@@ -1462,7 +1462,8 @@ useEffect(() => {
             marginTop: 12,
           }}>
             <div style={{ minWidth: 0 }}>
-              <div className="card">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div className="card" style={{ margin: 0 }}>
               <h2>Table</h2>
           <div className="hudBar">
             <div className="hudLeft">
@@ -1769,7 +1770,7 @@ useEffect(() => {
         </div>
       ) : null}
 
-              <div className="card">
+              <div className="card" style={{ margin: 0 }}>
 <hr />
 
               {state.phase === 'BIDDING' ? (
@@ -2150,9 +2151,10 @@ useEffect(() => {
                 ))}
               </div>
               </div>
+              </div>
             </div>
             <div style={{ minWidth: 0 }}>
-              <div className="card">
+              <div className="card" style={{ margin: 0 }}>
                 <ChatPanel
                   messages={mockMessages}
                   onSend={handleMockChatSend}
