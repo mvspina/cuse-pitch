@@ -1448,11 +1448,9 @@ useEffect(() => {
 
       {roomReady && state ? (
         <>
-          
-
-          <div className="row" style={{ marginTop: 12, flexWrap: 'wrap' }}>
-            <div className="col">
-<div className="card">
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap', marginTop: 12 }}>
+            <div style={{ flex: '1 1 520px', minWidth: 320 }}>
+              <div className="card">
               <h2>Table</h2>
           <div className="hudBar">
             <div className="hudLeft">
@@ -1717,16 +1715,10 @@ useEffect(() => {
       )}
     </div>
     <hr />
-            <div className="col">
-              <ChatPanel
-                messages={mockMessages}
-                onSend={handleMockChatSend}
-                title="Table Chat"
-              />
-            </div>
-          </div>
-  </>
+  </> 
 ) : null}
+
+              </div>
 
       {showPlayers ? (
         <div className="playersModalWrap">
@@ -2146,6 +2138,14 @@ useEffect(() => {
                 ))}
               </div>
             </div>
+            <div style={{ flex: '0 0 320px', minWidth: 280 }}>
+              <div className="card">
+                <ChatPanel
+                  messages={mockMessages}
+                  onSend={handleMockChatSend}
+                  title="Table Chat"
+                />
+              </div>
             </div>
           </div>
         </>
