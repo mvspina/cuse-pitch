@@ -7,6 +7,8 @@ import ChatPanel from './ChatPanel'
 
 type LeaderboardRow = { userId: number; name: string; games: number; wins: number; losses: number; winPct: number }
 
+type ChatMessage = { id: string; ts: number; userId?: number | null; name: string; text: string }
+
 const suitOptions: Suit[] = ['S','H','D','C']
 const TOKEN_KEY = 'cuse-pitch-token'
 const ROOM_KEY = 'cuse-pitch-room'
@@ -350,19 +352,10 @@ export default function App() {
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
-  const mockChatInitial = useMemo(() => [
-    { id: '1', ts: Date.now() - 60000, name: 'Alice', text: 'Good luck!' },
-    { id: '2', ts: Date.now() - 30000, name: 'Bob', text: 'What are we playing to?' },
-  ], [])
-  const [mockMessages, setMockMessages] = useState<Array<{ id: string; ts: number; name: string; text: string }>>(mockChatInitial)
-  const handleMockChatSend = useCallback((text: string) => {
-    const trimmed = text.trim().slice(0, 200)
-    if (!trimmed) return
-    setMockMessages(prev => {
-      const next = [...prev, { id: `${Date.now()}-${Math.random()}`, ts: Date.now(), name: 'You', text: trimmed }]
-      return next.length > 50 ? next.slice(-50) : next
-    })
-  }, [])
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
+  const [chatError, setChatError] = useState<string | null>(null)
+  const [chatLoading, setChatLoading] = useState(false)
+  const chatLoadedForRoomRef = useRef<string | null>(null)
 
   const apiBase = useMemo(() => {
     return window.location.origin
@@ -677,6 +670,56 @@ const prevPlaysLenRef = useRef<number>(0)
   }
 
   const roomReady = !!(net.roomCode && state)
+
+  useEffect(() => {
+    if (roomReady) return
+    setChatMessages([])
+    setChatError(null)
+    setChatLoading(false)
+    chatLoadedForRoomRef.current = null
+  }, [roomReady])
+
+  useEffect(() => {
+    if (!roomReady || !net.roomCode || !net.socket?.connected) return
+    if (chatLoadedForRoomRef.current === net.roomCode) return
+    const roomCode = net.roomCode
+    setChatLoading(true)
+    setChatError(null)
+    net.socket.emit('chat:history', { roomCode }, (resp: any) => {
+      if (resp?.ok === true && Array.isArray(resp.messages)) {
+        setChatMessages((resp.messages as ChatMessage[]).slice(-50))
+        chatLoadedForRoomRef.current = roomCode
+      } else {
+        setChatError(resp?.error ?? 'Failed to load chat')
+      }
+      setChatLoading(false)
+    })
+  }, [roomReady, net.roomCode, net.socket?.connected])
+
+  useEffect(() => {
+    const socket = net.socket
+    if (!socket) return
+    const handler = (payload: { roomCode?: string; message?: ChatMessage }) => {
+      if (payload.roomCode !== net.roomCode) return
+      if (!payload.message) return
+      setChatMessages(prev => [...prev, payload.message!].slice(-50))
+    }
+    socket.on('chat:message', handler)
+    return () => { socket.off('chat:message', handler) }
+  }, [net.socket, net.roomCode])
+
+  const onSendChat = useCallback((text: string) => {
+    if (!net.socket?.connected || !net.roomCode) {
+      setChatError('Not connected')
+      return
+    }
+    setChatError(null)
+    net.socket.emit('chat:send', { roomCode: net.roomCode, text }, (resp: any) => {
+      if (resp?.ok !== true) {
+        setChatError(resp?.error ?? 'Send failed')
+      }
+    })
+  }, [net.socket, net.roomCode])
 
   const nameTrim = (myName || '').trim()
   const nameValid = nameTrim.length >= 1 && nameTrim.length <= 18
@@ -2156,9 +2199,12 @@ useEffect(() => {
             <div style={{ minWidth: 0 }}>
               <div className="card" style={{ margin: 0 }}>
                 <ChatPanel
-                  messages={mockMessages}
-                  onSend={handleMockChatSend}
                   title="Table Chat"
+                  messages={chatMessages}
+                  disabled={!net.socket?.connected || !roomReady}
+                  onSend={onSendChat}
+                  loading={chatLoading}
+                  error={chatError}
                 />
               </div>
             </div>

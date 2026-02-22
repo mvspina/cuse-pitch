@@ -12,6 +12,8 @@ export type ChatPanelProps = {
   onSend?: (text: string) => void
   disabled?: boolean
   title?: string
+  loading?: boolean
+  error?: string | null
 }
 
 function formatTime(ts: number): string {
@@ -24,7 +26,7 @@ function formatTime(ts: number): string {
 const MAX_LENGTH = 200
 
 export default function ChatPanel(props: ChatPanelProps) {
-  const { messages = [], onSend, disabled = false, title = 'Table Chat' } = props
+  const { messages = [], onSend, disabled = false, title = 'Table Chat', loading = false, error = null } = props
   const [input, setInput] = useState('')
   const hasMessages = Array.isArray(messages) && messages.length > 0
 
@@ -46,6 +48,12 @@ export default function ChatPanel(props: ChatPanelProps) {
   return (
     <div className="card">
       <h2 style={{ margin: 0 }}>{title}</h2>
+      {loading && (
+        <div className="small" style={{ marginTop: 8, color: 'rgba(255,255,255,0.7)' }}>Loading…</div>
+      )}
+      {error && (
+        <div className="small" style={{ marginTop: 8, color: '#f88' }}>{error}</div>
+      )}
       <div
         style={{
           maxHeight: 200,
