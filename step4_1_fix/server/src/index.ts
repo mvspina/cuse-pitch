@@ -12,10 +12,10 @@ import { newGame, reducer } from './engine/game'
 import type { Action, GameSettings, GameState } from './engine/types'
 
 import { buildAuthRouter } from './auth/routes'
-import { getUserById } from './auth/db'
+import { getUserById, getAllUsernames } from './auth/db'
 import type { SessionUser } from './auth/db'
 
-import { getStats, upsertAddGame, computeBidRate, persistBidsForHand } from './stats/store'
+import { getStats, getLeaderboard, upsertAddGame, computeBidRate, persistBidsForHand } from './stats/store'
 
 type Room = {
   code: string
@@ -43,6 +43,10 @@ type Room = {
   /** Stable host identity; used for host-only auth after socket reconnects. */
   hostUserId: string | null
   rematchReady: Set<number>
+
+  // In-game chat (in memory, max 50 messages, no persistence)
+  chatMessages: Array<{ id: string; ts: number; userId: number | null; name: string; text: string }>
+  lastChatAtBySocketId: Map<string, number>
 }
 
 type StatePayload = {
@@ -156,6 +160,23 @@ async function bootstrap(): Promise<void> {
   })
   app.use('/api/auth', authLimiter, buildAuthRouter())
 
+  app.get('/admin/usernames', async (req, res) => {
+    const adminKey = process.env.ADMIN_KEY
+    const provided = (req.headers['admin-key'] as string) || (req.query.admin_key as string) || (req.query.ADMIN_KEY as string)
+    if (!adminKey || adminKey.trim() === '' || provided !== adminKey) {
+      res.status(401).json({ ok: false, error: 'Unauthorized' })
+      return
+    }
+    try {
+      const usernames = await getAllUsernames()
+      res.json({ usernames })
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error('[ADMIN] usernames failed:', message)
+      res.status(500).json({ ok: false, error: 'Failed to fetch usernames' })
+    }
+  })
+
   app.get('/api/stats/me', async (req, res) => {
     const user = (req as any)?.session?.user as SessionUser | undefined
     if (!user?.id) {
@@ -232,6 +253,8 @@ async function bootstrap(): Promise<void> {
   }
 
   const rooms = new Map<string, Room>()
+  /** Global token -> set of socket IDs using that token (for reliable per-player state emit). */
+  const tokenToSocketIds = new Map<string, Set<string>>()
 
   type Invite = { code: string, roomCode: string, createdAt: number }
   const invites = new Map<string, Invite>()
@@ -304,6 +327,8 @@ async function bootstrap(): Promise<void> {
       hostToken,
       hostUserId: hostUserId ?? null,
       rematchReady: new Set(),
+      chatMessages: [],
+      lastChatAtBySocketId: new Map(),
     }
 
     room.seatToken.set(0, hostToken)
@@ -336,6 +361,15 @@ async function bootstrap(): Promise<void> {
     return (seat === undefined) ? null : seat
   }
 
+  /** First open seat in range [0, maxSeats-1]; uses room.state.players.length as maxSeats. */
+  function firstOpenSeat(room: Room): number | null {
+    const maxSeats = room.state.players.length
+    for (let i = 0; i < maxSeats; i++) {
+      if (!room.seatToken.has(i)) return i
+    }
+    return null
+  }
+
   function maskStateForPlayer(state: GameState, playerIndex: number | null): GameState {
     const clone: GameState = JSON.parse(JSON.stringify(state))
     const pc = clone.players.length
@@ -358,8 +392,21 @@ async function bootstrap(): Promise<void> {
   }
   
   function emitToToken(room: Room, token: string): void {
-    const socketIds = room.socketsByToken.get(token)
-    if (!socketIds || socketIds.size === 0) return
+    let socketIds = tokenToSocketIds.get(token)
+    if (!socketIds || socketIds.size === 0) {
+      const fallback = room.socketsByToken.get(token)
+      if (fallback && fallback.size > 0) {
+        socketIds = fallback
+        if (process.env.DEBUG_JOIN_DEAL) {
+          console.warn('[DEBUG_JOIN_DEAL] emitToToken fallback: token=%s… no sockets in tokenToSocketIds, using room.socketsByToken (%s)', token.slice(0, 8), fallback.size)
+        }
+      } else {
+        if (process.env.DEBUG_JOIN_DEAL) {
+          console.warn('[DEBUG_JOIN_DEAL] emitToToken: token=%s… no sockets found in tokenToSocketIds or room.socketsByToken', token.slice(0, 8))
+        }
+        return
+      }
+    }
   
     const pi = playerIndexForToken(room, token)
     const masked = maskStateForPlayer(room.state, pi)
@@ -406,7 +453,15 @@ async function bootstrap(): Promise<void> {
   }
   
   function emitRoomState(room: Room): void {
-    for (const token of room.socketsByToken.keys()) emitToToken(room, token)
+    const pc = room.state.players.length
+    for (let i = 0; i < pc; i++) {
+      const token = room.seatToken.get(i)
+      if (token) emitToToken(room, token)
+    }
+    for (const [token] of room.socketsByToken) {
+      if (room.tokenSeat.has(token)) continue
+      emitToToken(room, token)
+    }
     io.to(room.code).emit('room:state', buildRoomStateSnapshot(room))
   }
   
@@ -414,6 +469,8 @@ async function bootstrap(): Promise<void> {
     room.tokenBySocketId.set(socketId, token)
     if (!room.socketsByToken.has(token)) room.socketsByToken.set(token, new Set())
     room.socketsByToken.get(token)!.add(socketId)
+    if (!tokenToSocketIds.has(token)) tokenToSocketIds.set(token, new Set())
+    tokenToSocketIds.get(token)!.add(socketId)
   }
   
   function detachSocket(room: Room, socketId: string): void {
@@ -424,6 +481,11 @@ async function bootstrap(): Promise<void> {
     if (set) {
       set.delete(socketId)
       if (set.size === 0) room.socketsByToken.delete(token)
+    }
+    const globalSet = tokenToSocketIds.get(token)
+    if (globalSet) {
+      globalSet.delete(socketId)
+      if (globalSet.size === 0) tokenToSocketIds.delete(token)
     }
   }
   
@@ -455,7 +517,40 @@ async function bootstrap(): Promise<void> {
     room.tokenSeat.delete(token)
     room.seatUserId.delete(seat)
   }
-  
+
+  function assertRoomInvariants(room: Room, contextLabel: string): void {
+    if (!process.env.DEBUG_JOIN_DEAL) return
+    const pc = room.state.players.length
+    const errors: string[] = []
+    for (const [seat, token] of room.seatToken.entries()) {
+      if (room.tokenSeat.get(token) !== seat) {
+        errors.push(`seatToken(${seat})=${token.slice(0, 8)}… but tokenSeat(${token.slice(0, 8)}…)=${room.tokenSeat.get(token)}`)
+      }
+      if (seat < 0 || seat >= pc) {
+        errors.push(`seat ${seat} out of range [0,${pc - 1}]`)
+      } else {
+        const player = room.state.players[seat]
+        if (!player) errors.push(`seat ${seat} has no room.state.players[${seat}]`)
+        const hand7 = room.state.hands7?.[seat]
+        const hand6 = room.state.hands6?.[seat]
+        if (!Array.isArray(hand7) && !Array.isArray(hand6)) {
+          errors.push(`seat ${seat} has no hand array (hands7/hands6)`)
+        }
+      }
+    }
+    for (const [token, seat] of room.tokenSeat.entries()) {
+      if (room.seatToken.get(seat) !== token) {
+        errors.push(`tokenSeat(${token.slice(0, 8)}…)=${seat} but seatToken(${seat})=${room.seatToken.get(seat)?.slice(0, 8) ?? 'undefined'}…`)
+      }
+    }
+    if (room.seatToken.size !== room.tokenSeat.size) {
+      errors.push(`seatToken.size=${room.seatToken.size} !== tokenSeat.size=${room.tokenSeat.size}`)
+    }
+    if (errors.length > 0) {
+      console.error('[DEBUG_JOIN_DEAL] assertRoomInvariants FAILED %s roomCode=%s:', contextLabel, room.code, errors)
+    }
+  }
+
   function isAuthorized(room: Room, token: string, action: Action): boolean {
     const pi = playerIndexForToken(room, token)
     if (pi === null) return false
@@ -510,14 +605,21 @@ async function bootstrap(): Promise<void> {
       const code = (payload.roomCode || '').toUpperCase().trim()
       const room = rooms.get(code)
       if (!room) { cb?.({ ok: false, error: 'Room not found' }); return }
-  
-      let token = payload.token && payload.token.length > 10 ? payload.token : genToken()
-  
+
+      socket.join(code)
+
+      const spectate = payload.spectate === true
       const authed = (socket.data as any).user as SessionUser | null
       const authedId = authed?.id != null ? String(authed.id) : undefined
-  
-      // Reconnect path: if this user is the host (by userId), always assign hostToken and seat 0 so host auth survives reconnect.
+
+      let token: string
+      let seat: number | null = null
+      let hostReconnected = false
+      let roomFull = false
+
+      // 1) Host reconnect: always assign hostToken and seat 0
       if (authedId && room.hostUserId != null && authedId === room.hostUserId) {
+        hostReconnected = true
         token = room.hostToken
         room.tokenUserId.set(token, authedId)
         const at0 = room.seatToken.get(0)
@@ -536,49 +638,78 @@ async function bootstrap(): Promise<void> {
           room.tokenSeat.set(token, 0)
           room.seatUserId.set(0, authedId)
         }
+        seat = 0
         console.log('[ROOM] join room=%s host reconnected userId=%s', code, authedId)
-      } else if (authedId) {
-        // If the user is logged in and already owns a seat in this room, prefer that seat's token.
-        for (const [s, uid] of room.seatUserId.entries()) {
-          if (uid === authedId) {
-            const existing = room.seatToken.get(s)
-            if (existing) token = existing
-            break
+      } else if (spectate) {
+        // 2) Spectate: do NOT assign a seat
+        token = payload.token && payload.token.length > 10 ? payload.token : genToken()
+      } else {
+        // 3) Join as player: resolve token and seat
+        if (payload.token && payload.token.length > 10) {
+          const existingSeat = room.tokenSeat.get(payload.token)
+          if (existingSeat !== undefined) {
+            token = payload.token
+            seat = existingSeat
+          } else {
+            token = payload.token
           }
+        } else {
+          token = genToken()
         }
-        room.tokenUserId.set(token, authedId)
+        if (seat === null) {
+          const open = firstOpenSeat(room)
+          if (open !== null) {
+            const result = takeSeat(room, token, open)
+            if (result.ok) { seat = open }
+          }
+          if (seat === null) roomFull = true
+        }
+        if (authedId) room.tokenUserId.set(token, authedId)
       }
+
+      if (seat !== null) {
+        room.seatToken.set(seat, token)
+        room.tokenSeat.set(token, seat)
+      }
+
       if (!room.hostUserId && authedId) room.hostUserId = authedId
-  
+
       attachSocketToToken(room, socket.id, token)
-      socket.join(code)
-  
-      // Reclaim seat if token already owns one
-      let seat = playerIndexForToken(room, token)
-  
-      // If no seat, keep as spectator (seat null). User can take a seat in lobby.
-      if (seat === null && !payload.spectate) {
-        const pc = room.state.players.length
-        for (let i = 0; i < pc; i++) {
-          if (i === 0) continue
-          if (!room.seatToken.has(i)) { takeSeat(room, token, i); seat = i; break }
-        }
-      }
-      // Always bind seat -> userId when seated and authenticated (join or reconnect with token that had a seat).
+      ;(socket.data as any).roomCode = code
+      ;(socket.data as any).token = token
+      ;(socket.data as any).playerIndex = seat
+
       if (seat !== null && authedId) {
         room.seatUserId.set(seat, authedId)
         room.tokenUserId.set(token, authedId)
       }
-  
-      // Set name only if seated and setup
+
       if (seat !== null && room.state.phase === 'SETUP') {
         const chosenName = (authed?.username || payload.name || `Player ${seat + 1}`).trim()
         room.state = reducer(room.state, { type: 'SET_NAME', playerIndex: seat, name: chosenName })
       }
-  
+
+      if (seat !== null && !hostReconnected) {
+        const displayName = room.state.players[seat]?.name || payload.name?.trim() || 'Player'
+        emitSystem(code, room, `${displayName} joined the table (Seat ${seat + 1}).`)
+      }
+
+      if (process.env.DEBUG_JOIN_DEAL) {
+        console.log('[DEBUG_JOIN_DEAL] joinRoom roomCode=%s name=%s spectate=%s tokenUsed=%s playerIndex=%s socketId=%s',
+          code, payload.name, spectate, token.slice(0, 8) + '…', seat, socket.id)
+      }
+      if (seat !== null) assertRoomInvariants(room, 'joinRoomSuccess')
+
       console.log('[ROOM] join room=%s token=%s seat=%s userId=%s isHost=%s', code, token.slice(0, 8) + '…', seat, authedId ?? 'anonymous', isHost(room, token))
       emitRoomState(room)
-      cb?.({ ok: true, roomCode: code, token, playerIndex: seat, isHost: isHost(room, token) })
+      cb?.({
+        ok: true,
+        roomCode: code,
+        token,
+        playerIndex: seat,
+        isHost: isHost(room, token),
+        ...(roomFull ? { error: 'Room full' } : {}),
+      })
     })
   
     socket.on('createInvite', (payload: { roomCode: string, token: string }, cb?: (resp: any) => void) => {
@@ -598,15 +729,19 @@ async function bootstrap(): Promise<void> {
     socket.on('joinInvite', (payload: { inviteCode: string, name: string, spectate?: boolean }, cb?: (resp: any) => void) => {
       const inviteCode = (payload.inviteCode || '').toUpperCase().trim()
       const inv = invites.get(inviteCode)
-      if (!inv) { cb?.({ ok: false, error: 'Invite not found or expired' }); return }
+      if (!inv) {
+        console.log('[ROOM] joinInvite failed inviteCode=%s (not found). Suggest using room code link.', inviteCode)
+        cb?.({ ok: false, error: 'Invite not found or expired. Ask the host for the room code link (e.g. /join/ABCDE).' })
+        return
+      }
       const room = rooms.get(inv.roomCode)
       if (!room) {
-        // Room is gone, clean up invite
         invites.delete(inviteCode)
         const set = invitesByRoom.get(inv.roomCode)
         set?.delete(inviteCode)
         if (set && set.size === 0) invitesByRoom.delete(inv.roomCode)
-        cb?.({ ok: false, error: 'Invite not found or expired' })
+        console.log('[ROOM] joinInvite failed room gone roomCode=%s. Suggest using room code link.', inv.roomCode)
+        cb?.({ ok: false, error: 'Invite not found or expired. Ask the host for the room code link (e.g. /join/ABCDE).' })
         return
       }
   
@@ -653,11 +788,15 @@ async function bootstrap(): Promise<void> {
   
       let seat = playerIndexForToken(room, token)
       if (seat === null && !payload.spectate) {
-        const pc = room.state.players.length
-        for (let i = 0; i < pc; i++) {
-          if (i === 0) continue
-          if (!room.seatToken.has(i)) { takeSeat(room, token, i); seat = i; break }
+        const open = firstOpenSeat(room)
+        if (open !== null) {
+          const result = takeSeat(room, token, open)
+          if (result.ok) seat = open
         }
+      }
+      if (seat !== null) {
+        room.seatToken.set(seat, token)
+        room.tokenSeat.set(token, seat)
       }
       if (seat !== null && authedId) {
         room.seatUserId.set(seat, authedId)
@@ -759,11 +898,116 @@ async function bootstrap(): Promise<void> {
         cb?.({ ok: false, error: 'Not in room' })
         return
       }
+      const seat = room.tokenSeat.get(token)
+      const leaveName = (seat != null && room.state.players[seat]?.name) ? room.state.players[seat].name : null
       detachSocket(room, socket.id)
       socket.leave(code)
       emitRoomState(room)
+      emitSystem(code, room, leaveName ? `${leaveName} left the table.` : 'A player left the table.')
       console.log('[ROOM] room:leave success userId=%s roomCode=%s', userId, code)
       cb?.({ ok: true })
+    })
+
+    type ChatMsg = { id: string; ts: number; userId: number | null; name: string; text: string }
+    function addChatMessage(room: Room, message: ChatMsg) {
+      room.chatMessages = room.chatMessages ?? []
+      room.chatMessages.push(message)
+      if (room.chatMessages.length > 50) room.chatMessages = room.chatMessages.slice(-50)
+    }
+    function makeSystemMessage(text: string): ChatMsg {
+      return {
+        id: `${Date.now()}-${Math.random()}`,
+        ts: Date.now(),
+        userId: null,
+        name: 'System',
+        text,
+      }
+    }
+    function emitSystem(roomCode: string, room: Room, text: string) {
+      const msg = makeSystemMessage(text)
+      addChatMessage(room, msg)
+      io.to(roomCode).emit('chat:message', { roomCode, message: msg })
+      console.log('[CHAT] system room=%s text=%s', roomCode, text)
+    }
+
+    socket.on('chat:send', (payload: { roomCode: string; text: string }, cb?: (resp: any) => void) => {
+      const code = (payload.roomCode || '').toUpperCase().trim()
+      const room = rooms.get(code)
+      if (!room) {
+        cb?.({ ok: false, error: 'Room not found' })
+        return
+      }
+      const token = room.tokenBySocketId.get(socket.id)
+      if (!token) {
+        cb?.({ ok: false, error: 'Not in room' })
+        return
+      }
+      const rawText = typeof payload.text === 'string' ? payload.text.trim() : ''
+      if (rawText.length < 1 || rawText.length > 200) {
+        cb?.({ ok: false, error: 'Message must be 1–200 characters' })
+        return
+      }
+      const now = Date.now()
+      const lastAt = room.lastChatAtBySocketId.get(socket.id) ?? 0
+      if (now - lastAt < 1000) {
+        cb?.({ ok: false, error: 'rate_limited' })
+        return
+      }
+      room.lastChatAtBySocketId.set(socket.id, now)
+      const uidStr = getSocketUserId(socket)
+      const userIdNum = uidStr != null ? parseInt(uidStr, 10) : null
+      const userId = Number.isFinite(userIdNum) ? userIdNum : null
+      const seat = room.tokenSeat.get(token)
+      const name = (seat != null && room.state.players[seat]?.name)
+        ? room.state.players[seat].name
+        : (userId != null ? `User ${userId}` : 'Guest')
+      const message = {
+        id: `${now}-${Math.random()}`,
+        ts: now,
+        userId,
+        name,
+        text: rawText,
+      }
+      room.chatMessages.push(message)
+      if (room.chatMessages.length > 50) room.chatMessages = room.chatMessages.slice(-50)
+      console.log('[CHAT] send room=%s userId=%s name=%s len=%s', code, userId ?? 'guest', name, rawText.length)
+      io.to(code).emit('chat:message', { roomCode: code, message })
+      console.log('[CHAT] broadcast room=%s total=%s', code, room.chatMessages.length)
+      cb?.({ ok: true })
+    })
+
+    socket.on('chat:history', (payload: { roomCode: string }, cb?: (resp: any) => void) => {
+      const code = (payload.roomCode || '').toUpperCase().trim()
+      const room = rooms.get(code)
+      if (!room) {
+        cb?.({ ok: false, error: 'Room not found' })
+        return
+      }
+      const token = room.tokenBySocketId.get(socket.id)
+      if (!token) {
+        cb?.({ ok: false, error: 'Not in room' })
+        return
+      }
+      cb?.({ ok: true, messages: room.chatMessages ?? [] })
+    })
+
+    socket.on('leaderboard:get', async (payload: { limit?: number }, cb?: (resp: any) => void) => {
+      const userId = getSocketUserId(socket)
+      if (!userId) {
+        cb?.({ ok: false, error: 'unauthorized' })
+        return
+      }
+      const limit = Math.min(25, Math.max(1, payload?.limit ?? 10))
+      console.log('[STATS] leaderboard requested userId=%s limit=%s', userId, limit)
+      try {
+        const rows = await getLeaderboard(limit)
+        console.log('[STATS] leaderboard success count=%s', rows.length)
+        cb?.({ ok: true, rows })
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error('[STATS] leaderboard failed error=%s', msg)
+        cb?.({ ok: false, error: 'leaderboard failed' })
+      }
     })
 
     socket.on('takeSeat', (payload: { roomCode: string, token: string, seat: number, name?: string }, cb?: (resp: any) => void) => {
@@ -999,6 +1243,7 @@ async function bootstrap(): Promise<void> {
         if (payload.action.type === 'START_HAND') {
           room.currentHandKey = `${code}:${room.gameSeq}:${nextState.handNumber}`
           console.log('[HAND] start room=%s handKey=%s dealer=%s handNumber=%s', code, room.currentHandKey, nextState.dealerIndex, nextState.handNumber)
+          assertRoomInvariants(room, 'afterDealBeforeEmit')
         }
 
         if (payload.action.type === 'PLACE_BID' && payload.action.bid !== 'PASS') {
@@ -1091,13 +1336,27 @@ async function bootstrap(): Promise<void> {
           }
         }
   
+        if (payload.action.type === 'START_HAND') assertRoomInvariants(room, 'beforeDealEmit')
         emitRoomState(room)
+
+        if (process.env.DEBUG_JOIN_DEAL && payload.action.type === 'START_HAND') {
+          const pc = room.state.players.length
+          for (let i = 0; i < pc; i++) {
+            const token = room.seatToken.get(i)
+            if (!token) continue
+            const sids = tokenToSocketIds.get(token) ?? room.socketsByToken.get(token)
+            const socketCount = sids ? sids.size : 0
+            const handLen = (room.state.hands7?.[i] ?? room.state.hands6?.[i])?.length ?? 0
+            console.log('[DEBUG_JOIN_DEAL] deal seat=%s token=%s… socketCount=%s handLen=%s', i, token.slice(0, 8), socketCount, handLen)
+          }
+        }
+
         cb?.({ ok: true })
       } catch (e: any) {
         cb?.({ ok: false, error: e?.message ?? 'Action failed' })
       }
     })
-  
+
     socket.on('disconnect', () => {
       console.log('[WS] disconnect socketId=%s userId=%s', socket.id, getSocketUserId(socket) ?? 'anonymous')
       for (const room of rooms.values()) {
@@ -1111,12 +1370,18 @@ async function bootstrap(): Promise<void> {
   const PORT = Number(process.env.PORT) || 3000
   
   if (process.env.NODE_ENV === 'production' && hasClientBuild) {
+    // SPA fallback: serve index.html for client routes so deep links (e.g. /join/ABCDE) work.
+    // Registered after all API routes so /admin, /api, /auth are not overridden.
+    app.get('/join/:code', (_req, res) => res.sendFile(path.join(clientDistPath, 'index.html')))
+    app.get('/join', (_req, res) => res.sendFile(path.join(clientDistPath, 'index.html')))
+    app.get('/', (_req, res) => res.sendFile(path.join(clientDistPath, 'index.html')))
     app.get('*', (req, res, next) => {
       if (req.method !== 'GET') return next()
-      const accept = req.headers.accept ?? ''
-      if (!accept.includes('text/html')) return next()
-      if (req.path === '/health' || req.path === '/healthz' || req.path.startsWith('/api') || req.path.startsWith('/socket.io')) return next()
-      res.sendFile(path.join(clientDistPath, 'index.html'))
+      if (req.path.startsWith('/admin') || req.path.startsWith('/api') || req.path.startsWith('/auth')) return res.status(404).end()
+      if (req.path.startsWith('/socket.io')) return next()
+      if (req.path === '/health' || req.path === '/healthz') return next()
+      if (req.path.includes('.')) return res.status(404).end()
+      return res.sendFile(path.join(clientDistPath, 'index.html'))
     })
   }
 

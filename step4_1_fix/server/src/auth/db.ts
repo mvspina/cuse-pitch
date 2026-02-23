@@ -14,11 +14,11 @@ export type SessionUser = {
 }
 
 export async function getUserByUsername(username: string): Promise<DbUser | null> {
-  const u = (username || '').trim()
+  const u = (username || '').trim().toLowerCase()
   if (!u) return null
   const pool = getPool()
   const res = await pool.query(
-    'SELECT id, username, email, password_hash AS "passwordHash", created_at AS "createdAt" FROM users WHERE username = $1',
+    'SELECT id, username, email, password_hash AS "passwordHash", created_at AS "createdAt" FROM users WHERE LOWER(username) = $1',
     [u]
   )
   const row = res.rows[0]
@@ -90,4 +90,11 @@ export async function createUser(username: string, email: string, passwordHash: 
 export async function updateUserPassword(userId: number, passwordHash: string): Promise<void> {
   const pool = getPool()
   await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [passwordHash, userId])
+}
+
+/** Returns only usernames from users table (no PII). For admin use. */
+export async function getAllUsernames(): Promise<string[]> {
+  const pool = getPool()
+  const res = await pool.query<{ username: string }>('SELECT username FROM users ORDER BY username')
+  return res.rows.map((r) => r.username)
 }

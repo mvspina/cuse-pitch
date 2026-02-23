@@ -1,11 +1,18 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { io, Socket } from 'socket.io-client'
 import { cardKey, currentHighBid, suitLabel, suitSymbol } from '../engine/game'
 import type { Action, BidKind, Card, GameSettings, GameState, Suit } from '../engine/types'
+import LeaderboardPanel from './LeaderboardPanel'
+import ChatPanel from './ChatPanel'
+
+type LeaderboardRow = { userId: number; name: string; games: number; wins: number; losses: number; winPct: number }
+
+type ChatMessage = { id: string; ts: number; userId?: number | null; name: string; text: string }
 
 const suitOptions: Suit[] = ['S','H','D','C']
 const TOKEN_KEY = 'cuse-pitch-token'
 const ROOM_KEY = 'cuse-pitch-room'
+const PENDING_JOIN_ROOM = 'cuse-pitch-pending-join-room'
 const SFX_KEY = 'cuse-pitch-sfx-enabled'
 const AUTH_USER_KEY = 'cuse-pitch-auth-user'
 
@@ -195,7 +202,6 @@ function teamRosterLabel(state: GameState, teamId: string): string {
   return members.join(', ')
 }
 
-
 function categoryName(c: string): string {
   if (c === 'HIGH') return 'High'
   if (c === 'LOW') return 'Low'
@@ -318,6 +324,13 @@ export default function App() {
     }
   })
 
+  const [autoJoinStatus, setAutoJoinStatus] = useState<'idle' | 'joining' | 'failed' | 'success'>('idle')
+  const [autoJoinError, setAutoJoinError] = useState<string>('')
+  const autoJoinStartedRef = useRef(false)
+  const joinCodeInputRef = useRef<HTMLInputElement>(null)
+
+  const isAuthed = Boolean(authUser?.id)
+
   const [inviteLink, setInviteLink] = useState<string | null>(null)
   const inviteShareSupported = useMemo(() => typeof (navigator as any)?.share === 'function', [])
   const [profileOpen, setProfileOpen] = useState(false)
@@ -327,6 +340,10 @@ export default function App() {
 
   const [homeBusy, setHomeBusy] = useState<null | 'create' | 'join'>(null)
   const [homeToast, setHomeToast] = useState<string | null>(null)
+  const [leaderboardRows, setLeaderboardRows] = useState<LeaderboardRow[]>([])
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false)
+  const [leaderboardError, setLeaderboardError] = useState<string | null>(null)
+  const leaderboardFetchedRef = useRef(false)
   const [bidSuit, setBidSuit] = useState<Suit>('S')
   const [showHistory, setShowHistory] = useState(false)
   const [showPlayers, setShowPlayers] = useState(false)
@@ -335,10 +352,79 @@ export default function App() {
   const [lingerWinnerIndex, setLingerWinnerIndex] = useState<number | null>(null)
   const [lingerLeaderIndex, setLingerLeaderIndex] = useState<number | null>(null)
   const [lingerAnim, setLingerAnim] = useState<'hold'|'slide'>('hold')
+  const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 900)
+  useEffect(() => {
+    const onResize = () => setIsNarrow(window.innerWidth < 900)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
+  const [chatError, setChatError] = useState<string | null>(null)
+  const [chatLoading, setChatLoading] = useState(false)
+  const chatLoadedForRoomRef = useRef<string | null>(null)
+
+  const [discardSelectedIds, setDiscardSelectedIds] = useState<Set<string>>(() => new Set())
+  const [discardHandLocal, setDiscardHandLocal] = useState<Card[]>([])
+  const [discardPileLocal, setDiscardPileLocal] = useState<Card[]>([])
+  const discardLocalInitializedRef = useRef(false)
+  const lastDiscardHandSigRef = useRef<string>('')
+  const lastPhaseRef = useRef<string>('')
+  const [discardSubmitting, setDiscardSubmitting] = useState(false)
 
   const apiBase = useMemo(() => {
     return window.location.origin
   }, [])
+
+  useEffect(() => {
+    const phase = state?.phase
+    const pi = net.playerIndex
+    if (phase === 'DISCARD' && pi !== null && !discardLocalInitializedRef.current) {
+      const serverHand = state.hands7?.[pi]
+      const dealt = state.dealtHands7?.[pi]
+      const source = (serverHand?.length ? serverHand : dealt) ?? []
+      setDiscardHandLocal(source.map(c => ({ ...c })))
+      setDiscardPileLocal([])
+      setDiscardSelectedIds(new Set())
+      discardLocalInitializedRef.current = true
+    }
+    if (phase !== 'DISCARD') {
+      discardLocalInitializedRef.current = false
+      setDiscardHandLocal([])
+      setDiscardPileLocal([])
+    }
+  }, [state?.phase, state?.hands7, state?.dealtHands7, net.playerIndex])
+
+  useEffect(() => {
+    if (state?.phase !== 'DISCARD') setDiscardSubmitting(false)
+    const pi = net.playerIndex
+    if (state?.phase === 'DISCARD' && pi !== null && state.discardDone?.[pi]) setDiscardSubmitting(false)
+  }, [state?.phase, state?.discardDone, net.playerIndex])
+
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return
+    if (localStorage.getItem('DEBUG_JOIN') === '1') {
+      console.log('[JOINLINK] path=', window.location.pathname, 'code=', pendingInviteCode)
+    }
+  }, [pendingInviteCode])
+
+  useEffect(() => {
+    try {
+      const path = (typeof window !== 'undefined' && window.location.pathname) || ''
+      const m = path.match(/^\/join\/([A-Za-z0-9]{5})\/?$/i)
+      if (m?.[1]) {
+        const code = m[1].toUpperCase()
+        localStorage.setItem(PENDING_JOIN_ROOM, code)
+      }
+    } catch {}
+  }, [])
+
+  useEffect(() => {
+    if (isAuthed) return
+    const fromStorage = typeof localStorage !== 'undefined' ? localStorage.getItem(PENDING_JOIN_ROOM) : null
+    const hasPending = !!(pendingInviteCode || (fromStorage && fromStorage.trim()))
+    if (hasPending && !authMode) setAuthMode('login')
+  }, [isAuthed, pendingInviteCode, authMode])
 
 
 
@@ -407,6 +493,10 @@ export default function App() {
         localStorage.setItem(AUTH_USER_KEY, JSON.stringify(u))
         setAuthMode(null)
         setAuthPassword('')
+        try {
+          const pending = localStorage.getItem(PENDING_JOIN_ROOM)
+          if (pending && pending.trim()) setPendingInviteCode(pending.trim().toUpperCase())
+        } catch {}
       }
     } catch (e: any) {
       setAuthError(e?.message || 'Auth failed')
@@ -526,9 +616,25 @@ const prevPlaysLenRef = useRef<number>(0)
   const [trumpRippleTick, setTrumpRippleTick] = useState(0)
 
   useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search)
+      const t = params.get('t')
+      if (t && typeof t === 'string' && t.length > 10 && !localStorage.getItem(TOKEN_KEY)) {
+        localStorage.setItem(TOKEN_KEY, t)
+      }
+    } catch {}
+
     const serverUrl = (import.meta.env.VITE_SOCKET_URL as string | undefined)?.trim() || window.location.origin
     const s = io(serverUrl, { transports: ['websocket', 'polling'], withCredentials: true })
     setNet(n => ({ ...n, socket: s }))
+
+    const setUrlToken = (token: string) => {
+      try {
+        const u = new URL(window.location.href)
+        u.searchParams.set('t', token)
+        window.history.replaceState({}, '', u.pathname + '?' + u.searchParams.toString() + (u.hash || ''))
+      } catch {}
+    }
 
     const attemptReconnect = () => {
       const storedToken = localStorage.getItem(TOKEN_KEY) || ''
@@ -576,12 +682,7 @@ const prevPlaysLenRef = useRef<number>(0)
 
     s.on('connect', () => {
       setNet(n => ({ ...n, connected: true, error: null }))
-      // Invite links should take priority over any stored room.
-      if (pendingInviteCode) {
-        joinByInvite(pendingInviteCode, s)
-      } else {
-        attemptReconnect()
-      }
+      if (!pendingInviteCode) attemptReconnect()
     })
     s.on('disconnect', () => setNet(n => ({ ...n, connected: false })))
 
@@ -601,7 +702,35 @@ const prevPlaysLenRef = useRef<number>(0)
       }))
       setState(payload.state)
 
-      if (payload.token) localStorage.setItem(TOKEN_KEY, payload.token)
+      const pi = payload.playerIndex
+      const phase = payload.state?.phase
+      const discardDone = payload.state?.discardDone
+      if (phase !== 'DISCARD') {
+        setDiscardSelectedIds(new Set())
+        lastDiscardHandSigRef.current = ''
+      } else {
+        if (lastPhaseRef.current !== 'DISCARD') {
+          setDiscardSelectedIds(new Set())
+        }
+        if (pi != null && discardDone?.[pi]) {
+          setDiscardSelectedIds(new Set())
+          const hand = payload.state.hands7?.[pi] ?? []
+          lastDiscardHandSigRef.current = hand.map(cardKey).sort().join('|')
+        }
+      }
+      lastPhaseRef.current = phase ?? ''
+      setDiscardSubmitting(false)
+
+      if (typeof localStorage !== 'undefined' && localStorage.getItem('DEBUG_STATE') === '1') {
+        const handLen = (payload.state?.hands7 ?? payload.state?.hands6)?.[payload.playerIndex ?? -1]?.length ?? 0
+        console.log('[STATE] roomCode=%s playerIndex=%s handLen=%s phase=%s', payload.roomCode, payload.playerIndex, handLen, payload.state?.phase)
+      }
+
+      const existing = localStorage.getItem(TOKEN_KEY) || ''
+      if (payload.token && (payload.playerIndex !== null || !existing)) {
+        localStorage.setItem(TOKEN_KEY, payload.token)
+        setUrlToken(payload.token)
+      }
       if (payload.roomCode) localStorage.setItem(ROOM_KEY, payload.roomCode)
     })
 
@@ -631,6 +760,17 @@ const prevPlaysLenRef = useRef<number>(0)
     return () => { s.disconnect() }
   }, [])
 
+  useEffect(() => {
+    if (!isAuthed) return
+    const code = pendingInviteCode || (typeof localStorage !== 'undefined' ? (localStorage.getItem(PENDING_JOIN_ROOM) || '').trim().toUpperCase() : '') || null
+    if (!code || !net.socket?.connected) return
+    if (autoJoinStartedRef.current) return
+    autoJoinStartedRef.current = true
+    setAutoJoinStatus('joining')
+    const s = net.socket
+    void attemptAutoJoin(code, s)
+  }, [isAuthed, pendingInviteCode, net.connected, net.socket])
+
   const currentHigh = useMemo(() => state ? currentHighBid(state.bidHistory) : null, [state?.bidHistory])
   const me = (state && net.playerIndex !== null) ? state.players[net.playerIndex] : null
   const dealer = state ? state.players[state.dealerIndex] : null
@@ -650,10 +790,109 @@ const prevPlaysLenRef = useRef<number>(0)
 
   const roomReady = !!(net.roomCode && state)
 
+  const effectivePendingCode = useMemo(() => {
+    try {
+      const fromStorage = typeof localStorage !== 'undefined' ? localStorage.getItem(PENDING_JOIN_ROOM) : null
+      const s = (fromStorage || '').trim().toUpperCase()
+      if (s) return s
+    } catch {}
+    return pendingInviteCode || null
+  }, [pendingInviteCode])
+
+  useEffect(() => {
+    if (roomReady) return
+    setChatMessages([])
+    setChatError(null)
+    setChatLoading(false)
+    chatLoadedForRoomRef.current = null
+  }, [roomReady])
+
+  useEffect(() => {
+    if (!roomReady || !net.roomCode || !net.socket?.connected) return
+    if (chatLoadedForRoomRef.current === net.roomCode) return
+    const roomCode = net.roomCode
+    setChatLoading(true)
+    setChatError(null)
+    net.socket.emit('chat:history', { roomCode }, (resp: any) => {
+      if (resp?.ok === true && Array.isArray(resp.messages)) {
+        setChatMessages((resp.messages as ChatMessage[]).slice(-50))
+        chatLoadedForRoomRef.current = roomCode
+      } else {
+        setChatError(resp?.error ?? 'Failed to load chat')
+      }
+      setChatLoading(false)
+    })
+  }, [roomReady, net.roomCode, net.socket?.connected])
+
+  useEffect(() => {
+    const socket = net.socket
+    if (!socket) return
+    const handler = (payload: { roomCode?: string; message?: ChatMessage }) => {
+      if (payload.roomCode !== net.roomCode) return
+      if (!payload.message) return
+      setChatMessages(prev => [...prev, payload.message!].slice(-50))
+    }
+    socket.on('chat:message', handler)
+    return () => { socket.off('chat:message', handler) }
+  }, [net.socket, net.roomCode])
+
+  const onSendChat = useCallback((text: string) => {
+    if (!net.socket?.connected || !net.roomCode) {
+      setChatError('Not connected')
+      return
+    }
+    setChatError(null)
+    net.socket.emit('chat:send', { roomCode: net.roomCode, text }, (resp: any) => {
+      if (resp?.ok !== true) {
+        setChatError(resp?.error ?? 'Send failed')
+      }
+    })
+  }, [net.socket, net.roomCode])
+
   const nameTrim = (myName || '').trim()
   const nameValid = nameTrim.length >= 1 && nameTrim.length <= 18
   const normalizedJoinCode = (joinCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
   const joinCodeValid = normalizedJoinCode.length >= 4 && normalizedJoinCode.length <= 8
+
+  function fetchLeaderboard() {
+    try {
+      if (!net.socket || !net.socket.connected) {
+        setLeaderboardError('Not connected')
+        setLeaderboardRows([])
+        return
+      }
+      setLeaderboardLoading(true)
+      setLeaderboardError(null)
+      net.socket.emit('leaderboard:get', { limit: 10 }, (resp: any) => {
+        try {
+          if (resp && resp.ok === true && Array.isArray(resp.rows)) {
+            setLeaderboardRows(resp.rows)
+            setLeaderboardError(null)
+          } else {
+            setLeaderboardRows([])
+            setLeaderboardError(resp?.error ?? 'Failed to load leaderboard')
+          }
+        } finally {
+          setLeaderboardLoading(false)
+        }
+      })
+    } catch {
+      setLeaderboardError('Failed to load leaderboard')
+      setLeaderboardRows([])
+      setLeaderboardLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (roomReady || !authUser) leaderboardFetchedRef.current = false
+  }, [roomReady, authUser])
+
+  useEffect(() => {
+    if (!authUser || roomReady || !net.socket?.connected) return
+    if (leaderboardFetchedRef.current) return
+    leaderboardFetchedRef.current = true
+    fetchLeaderboard()
+  }, [authUser, roomReady, net.socket?.connected])
 
   function showToast(msg: string) {
     setHomeToast(msg)
@@ -686,7 +925,9 @@ const prevPlaysLenRef = useRef<number>(0)
     net.socket.emit(event, payload, (resp: any) => {
       if (!resp?.ok) {
         const msg = resp?.error ?? 'Request failed'
+        console.error('[RPC]', event, 'failed:', msg)
         setNet(n => ({ ...n, error: msg }))
+        showToast(msg)
         onErr?.(msg)
         return
       }
@@ -741,49 +982,59 @@ const prevPlaysLenRef = useRef<number>(0)
       return
     }
     setHomeBusy('join')
+    const storedRoom = localStorage.getItem(ROOM_KEY) || ''
+    const storedToken = localStorage.getItem(TOKEN_KEY) || ''
+    const payload: { roomCode: string; name: string; spectate?: boolean; token?: string } = {
+      roomCode: code,
+      name: (authUser?.username || myName || 'Player').trim() || 'Player',
+      spectate: watchOnly,
+    }
+    if (storedRoom === code && storedToken) payload.token = storedToken
     rpc(
       'joinRoom',
-      { roomCode: code, name: (authUser?.username || myName || 'Player').trim() || 'Player', spectate: watchOnly },
+      payload,
       (resp) => {
         try {
           localStorage.setItem(ROOM_KEY, resp.roomCode)
           localStorage.setItem(TOKEN_KEY, resp.token)
         } catch {}
-        setNet(n => ({ ...n, roomCode: resp.roomCode, token: resp.token, playerIndex: resp.playerIndex ?? n.playerIndex, kickedMessage: undefined }))
-        net.socket?.emit('reconnectRoom', { roomCode: resp.roomCode, token: resp.token }, () => {})
+        setNet(n => ({ ...n, roomCode: resp.roomCode, token: resp.token, playerIndex: resp.playerIndex ?? n.playerIndex, kickedMessage: undefined, error: resp.error ?? null }))
         setHomeBusy(null)
       },
       () => setHomeBusy(null)
     )
   }
 
-  function joinByInvite(inviteCode: string, socketOverride?: Socket) {
+  function joinByInvite(inviteCode: string, socketOverride?: Socket): Promise<{ ok: boolean; error?: string }> {
     const s = socketOverride || net.socket
-    if (!s) return
-    if (!net.connected || homeBusy) return
+    if (!s) return Promise.resolve({ ok: false, error: 'No socket' })
+    const connected = socketOverride ? socketOverride.connected : net.connected
+    if (!connected || homeBusy) return Promise.resolve({ ok: false, error: 'Not connected or busy' })
     if (!nameValid) {
       setNet(n => ({ ...n, error: 'Please enter a name (1 to 18 characters).' }))
-      return
+      return Promise.resolve({ ok: false, error: 'Please enter a name (1 to 18 characters).' })
     }
-    const code = (inviteCode || '').toUpperCase().trim()
+    const code = (inviteCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '').trim()
     if (!code) {
       setNet(n => ({ ...n, error: 'Invalid invite link.' }))
-      return
+      return Promise.resolve({ ok: false, error: 'Invalid invite link.' })
     }
-    setHomeBusy('join')
-    s.emit('joinInvite', { inviteCode: code, name: (authUser?.username || myName || 'Player').trim() || 'Player', spectate: watchOnly }, (resp: any) => {
-      if (!resp?.ok) {
-        const msg = resp?.error ?? 'Invite join failed'
-        setNet(n => ({ ...n, error: msg }))
-        setHomeBusy(null)
-        return
-      }
+    const name = (authUser?.username || myName || 'Player').trim() || 'Player'
+    const storedRoom = localStorage.getItem(ROOM_KEY) || ''
+    const existingToken = localStorage.getItem(TOKEN_KEY) || ''
+
+    const onJoinSuccess = (resp: any) => {
       try {
         localStorage.setItem(ROOM_KEY, resp.roomCode)
         localStorage.setItem(TOKEN_KEY, resp.token)
+        localStorage.removeItem(PENDING_JOIN_ROOM)
       } catch {}
-      setNet(n => ({ ...n, roomCode: resp.roomCode, token: resp.token, playerIndex: resp.playerIndex ?? n.playerIndex, isHost: !!resp.isHost, kickedMessage: undefined }))
-      s.emit('reconnectRoom', { roomCode: resp.roomCode, token: resp.token }, () => {})
+      try {
+        const u = new URL(window.location.href)
+        u.searchParams.set('t', resp.token)
+        window.history.replaceState({}, '', u.pathname + '?' + u.searchParams.toString() + (u.hash || ''))
+      } catch {}
+      setNet(n => ({ ...n, roomCode: resp.roomCode, token: resp.token, playerIndex: resp.playerIndex ?? n.playerIndex, isHost: !!resp.isHost, kickedMessage: undefined, error: resp.error ?? null }))
       setPendingInviteCode(null)
       try {
         if (window.location.pathname.startsWith('/join/')) {
@@ -798,7 +1049,97 @@ const prevPlaysLenRef = useRef<number>(0)
         }
       } catch {}
       setHomeBusy(null)
+    }
+
+    setHomeBusy('join')
+
+    return new Promise<{ ok: boolean; error?: string }>((resolve) => {
+      const resolveWithError = (err: string) => {
+        setNet(n => ({ ...n, error: err }))
+        setHomeBusy(null)
+        resolve({ ok: false, error: err })
+      }
+      try {
+        if (code.length === 5) {
+          const joinPayload: { roomCode: string; name: string; spectate?: boolean; token?: string } = {
+            roomCode: code,
+            name: name.trim() || 'Player',
+            spectate: watchOnly,
+          }
+          if (storedRoom === code && existingToken) joinPayload.token = existingToken
+          s.emit('joinRoom', joinPayload, (resp: any) => {
+            try {
+              if (!resp?.ok) {
+                const msg = resp?.error ?? 'Join failed'
+                resolveWithError(msg)
+                return
+              }
+              onJoinSuccess(resp)
+              resolve({ ok: true })
+            } catch (e) {
+              resolveWithError('Network error joining room')
+            }
+          })
+          return
+        }
+        s.emit('joinInvite', { inviteCode: code, name, spectate: watchOnly }, (resp: any) => {
+          try {
+            if (!resp?.ok) {
+              const msg = resp?.error ?? 'Invite not found or expired. Ask the host for the room code (e.g. /join/ABCDE).'
+              resolveWithError(msg)
+              return
+            }
+            onJoinSuccess(resp)
+            resolve({ ok: true })
+          } catch (e) {
+            resolveWithError('Network error joining room')
+          }
+        })
+      } catch (e) {
+        resolveWithError('Network error joining room')
+      }
     })
+  }
+
+  async function attemptAutoJoin(code: string, s: Socket) {
+    setAutoJoinStatus('joining')
+    setAutoJoinError('')
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('DEBUG_JOIN') === '1') {
+      console.log('[DEBUG_JOIN] parsed code=', code, 'join attempt started')
+    }
+    const delays = [300, 600, 1200, 2000, 3000]
+    for (let attempt = 0; attempt <= delays.length; attempt++) {
+      const result = await joinByInvite(code, s)
+      if (typeof localStorage !== 'undefined' && localStorage.getItem('DEBUG_JOIN') === '1') {
+        console.log('[DEBUG_JOIN] result.ok=', result.ok, 'error=', result.error)
+      }
+      if (result.ok) {
+        setAutoJoinStatus('success')
+        setAutoJoinError('')
+        try {
+          localStorage.removeItem(PENDING_JOIN_ROOM)
+        } catch {}
+        setPendingInviteCode(null)
+        window.history.replaceState({}, '', '/')
+        return
+      }
+      const err = result.error ?? 'Join failed'
+      const isRoomNotFound = /room not found/i.test(err)
+      if (isRoomNotFound || attempt >= delays.length) {
+        setAutoJoinStatus('failed')
+        setAutoJoinError(err)
+        setNet(n => ({ ...n, error: err }))
+        if (isRoomNotFound && code) {
+          setJoinCode(code)
+          setTimeout(() => {
+            joinCodeInputRef.current?.focus()
+            joinCodeInputRef.current?.closest('.card')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+          }, 100)
+        }
+        return
+      }
+      await new Promise(r => setTimeout(r, delays[attempt]))
+    }
   }
 
   function takeSeat(seat: number) {
@@ -846,14 +1187,9 @@ const prevPlaysLenRef = useRef<number>(0)
 
   function hostInvite() {
     if (!net.roomCode || !net.token) return
-    rpc('createInvite', { roomCode: net.roomCode, token: net.token }, (resp) => {
-      const inviteCode = (resp?.inviteCode || '').toString().trim()
-      if (!inviteCode) return
-      const link = `${window.location.origin}/join/${inviteCode}`
-      setInviteLink(link)
-      // Default action: copy immediately (old behavior), but now also show the link in a modal.
-      void copyToClipboard(link)
-    })
+    const link = `${window.location.origin}/join/${net.roomCode}`
+    setInviteLink(link)
+    void copyToClipboard(link)
   }
 
 
@@ -965,11 +1301,11 @@ const prevPlaysLenRef = useRef<number>(0)
 
   const [confettiSeed, setConfettiSeed] = useState<number>(1)
   const [confettiOn, setConfettiOn] = useState<boolean>(false)
-  const lastPhaseRef = useRef<string | null>(null)
+  const lastUiPhaseRef = useRef<string | null>(null)
   useEffect(() => {
     const phase = state?.phase ?? null
-    const prev = lastPhaseRef.current
-    lastPhaseRef.current = phase
+    const prev = lastUiPhaseRef.current
+    lastUiPhaseRef.current = phase
     if (phase === 'GAME_END' && prev !== 'GAME_END') {
       setConfettiSeed(Date.now())
       setConfettiOn(true)
@@ -1164,7 +1500,7 @@ useEffect(() => {
         </div>
         <div className="small" style={{ color: 'rgba(255,255,255,0.92)', marginTop: 6, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <span>
-            Socket: <strong>{net.connected ? 'Connected' : 'Disconnected'}</strong>
+            Socket: <strong>{net.connected ? 'Connected' : 'Reconnecting…'}</strong>
             {roomReady ? <> | Room: <strong>{net.roomCode}</strong> | You: <strong>{net.playerIndex !== null ? playerName(net.playerIndex) : 'Spectator'}</strong></> : null}
             {net.isHost ? <> | <strong>Host</strong></> : null}
           </span>
@@ -1174,6 +1510,11 @@ useEffect(() => {
             </button>
           ) : null}
         </div>
+        {roomReady && net.playerIndex === null ? (
+          <div className="small" style={{ marginTop: 6, padding: '8px 10px', background: 'rgba(255,255,255,0.1)', borderRadius: 8 }}>
+            <strong>Spectating</strong> — Take a seat to play.
+          </div>
+        ) : null}
         {net.error ? (
           <div className="small" style={{ color: '#ffd1d1', marginTop: 6 }}>
             Error: {net.error}
@@ -1190,6 +1531,33 @@ useEffect(() => {
             </div>
           ) : null}
           {net.error ? (<div className="errorBox" style={{ marginBottom: 12 }}>{net.error}</div>) : null}
+          {effectivePendingCode && autoJoinStatus === 'joining' ? (
+            <div className="banner" style={{ marginBottom: 12 }}>
+              Joining room {effectivePendingCode}…
+            </div>
+          ) : null}
+          {effectivePendingCode && autoJoinStatus === 'failed' ? (
+            <div className="errorBox" style={{ marginBottom: 12 }}>
+              Could not join room {effectivePendingCode}: {autoJoinError || net.error || 'Unknown error'}. The room may have ended. Ask the host to create a new room and send a new link.
+              <div style={{ marginTop: 8 }}>
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={() => {
+                    setJoinCode(effectivePendingCode ?? '')
+                    joinCodeInputRef.current?.focus()
+                  }}
+                >
+                  Enter code manually
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {!isAuthed && effectivePendingCode ? (
+            <div className="banner" style={{ marginBottom: 12 }}>
+              Log in to join room {effectivePendingCode}.
+            </div>
+          ) : null}
 
           <div className="bannerRow" style={{ marginBottom: 12 }}>
             <div className="banner" style={{ alignItems: 'stretch' }}>
@@ -1248,8 +1616,8 @@ useEffect(() => {
                   ) : (
                     <>
                       <div style={{ minWidth: 180 }}>
-                        <label style={{ display: 'block' }}>Username</label>
-                        <input value={authUsername} onChange={e => setAuthUsername(e.target.value)} placeholder="username" />
+                        <label style={{ display: 'block' }}>{authMode === 'login' ? 'Username or email' : 'Username'}</label>
+                        <input value={authUsername} onChange={e => setAuthUsername(e.target.value)} placeholder={authMode === 'login' ? 'Username or email' : 'username'} />
                       </div>
                       {authMode === 'signup' ? (
                         <div style={{ minWidth: 260 }}>
@@ -1304,7 +1672,14 @@ useEffect(() => {
                   <div style={{ height: 10 }} />
 
                   <label>Room code</label>
-                  <input value={joinCode} onChange={e => setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))} onKeyDown={e => { if (e.key === 'Enter' && net.connected && !homeBusy && joinCodeValid) joinRoom() }} placeholder="ABCDE" onBlur={() => { if (joinCode !== normalizedJoinCode) setJoinCode(normalizedJoinCode) }} />
+                  <input
+                    ref={joinCodeInputRef}
+                    value={joinCode}
+                    onChange={e => setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+                    onKeyDown={e => { if (e.key === 'Enter' && net.connected && !homeBusy && joinCodeValid) joinRoom() }}
+                    placeholder="ABCDE"
+                    onBlur={() => { if (joinCode !== normalizedJoinCode) setJoinCode(normalizedJoinCode) }}
+                  />
 
                   <div style={{ marginTop: 10 }}>
                     <label className="pill" style={{ cursor: 'pointer' }}>
@@ -1363,6 +1738,15 @@ useEffect(() => {
                   </div>
                 </div>
               </div>
+
+              <div className="col">
+                <LeaderboardPanel
+                  rows={leaderboardRows.map(r => ({ name: r.name, games: r.games, wins: r.wins, losses: r.losses, winPct: r.winPct }))}
+                  loading={leaderboardLoading}
+                  error={leaderboardError}
+                  onRefresh={fetchLeaderboard}
+                />
+              </div>
             </>
           ) : (
             <div className="col">
@@ -1377,11 +1761,16 @@ useEffect(() => {
 
       {roomReady && state ? (
         <>
-          
-
-          <div className="row" style={{ marginTop: 12 }}>
-            <div className="col">
-<div className="card">
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: isNarrow ? '1fr' : 'minmax(0, 1fr) 340px',
+            gap: 12,
+            alignItems: 'start',
+            marginTop: 12,
+          }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div className="card" style={{ margin: 0 }}>
               <h2>Table</h2>
           <div className="hudBar">
             <div className="hudLeft">
@@ -1646,8 +2035,10 @@ useEffect(() => {
       )}
     </div>
     <hr />
-  </>
+  </> 
 ) : null}
+
+              </div>
 
       {showPlayers ? (
         <div className="playersModalWrap">
@@ -1686,7 +2077,7 @@ useEffect(() => {
         </div>
       ) : null}
 
-
+              <div className="card" style={{ margin: 0 }}>
 <hr />
 
               {state.phase === 'BIDDING' ? (
@@ -1835,12 +2226,16 @@ useEffect(() => {
 
               {state.phase === 'DISCARD' ? (
   <>
-    <div className="small">
-      Discard phase. Each player may discard any number of cards. Tap a card to move it between <strong>Keep</strong> and <strong>Discard</strong>.
-                    <br />
-                    <span className="small" style={{ opacity: 0.8 }}>Debug: keep {net.playerIndex !== null ? state.hands7[net.playerIndex].length : 0} | dealt {net.playerIndex !== null ? state.dealtHands7[net.playerIndex].length : 0}</span>.
-      <br />
-      Current confirmer: <strong>{playerName(state.currentPlayerIndex)}</strong>
+    <div className="phaseBanner">
+      <div className="phaseTitle">Discard</div>
+      <div className="phaseHint">
+        {net.playerIndex === null
+          ? 'Take a seat to discard.'
+          : 'Tap cards to move between Keep and Discard. After you confirm, cards lock.'}
+      </div>
+      {net.playerIndex !== null && (!!state.discardDone[net.playerIndex] || discardSubmitting) ? (
+        <span className="badge badgeLocked">Locked</span>
+      ) : null}
     </div>
 
     <hr />
@@ -1848,10 +2243,13 @@ useEffect(() => {
     <div className="row">
       <button
         className="primary"
-        onClick={() => send({ type: 'CONFIRM_DISCARD', playerIndex: net.playerIndex! })}
-        disabled={net.playerIndex === null || state.discardDone[net.playerIndex]}
+        onClick={() => {
+          setDiscardSubmitting(true)
+          send({ type: 'CONFIRM_DISCARD', playerIndex: net.playerIndex! })
+        }}
+        disabled={net.playerIndex === null || state.discardDone[net.playerIndex] || discardSubmitting}
       >
-        Confirm Discards
+        {discardSubmitting ? 'Confirming…' : (net.playerIndex !== null && state.discardDone[net.playerIndex] ? 'Confirmed' : 'Confirm Discards')}
       </button>
 
       <button
@@ -1863,60 +2261,145 @@ useEffect(() => {
       </button>
     </div>
 
-    <p className="small" style={{ marginTop: 10 }}>
-      Confirmed: {state.discardDone.map((d, i) => `${playerName(i)}: ${d ? 'Yes' : 'No'}`).join(' | ')}
-    </p>
+    {(() => {
+      const trump = state.trump
+      const trumpSym = trump ? suitSymbol[trump] : ''
+      const trumpName = trump ? suitLabel[trump] : 'Not selected'
+      const trumpIsRed = trump === 'H' || trump === 'D'
+
+      const bidWinnerName =
+        state.bidWinnerIndex != null ? playerName(state.bidWinnerIndex) : 'None'
+      const bidAmount =
+        state.winningBid != null ? String(state.winningBid) : 'None'
+
+      return (
+        <div className="trumpBanner">
+          <span className="trumpLabel">Trump:</span>
+          {trump ? (
+            <>
+              <span className={`trumpSymbol ${trumpIsRed ? 'red' : 'black'}`}>{trumpSym}</span>
+              <span className="trumpValue">{trumpName}</span>
+            </>
+          ) : (
+            <span className="trumpValue">{trumpName}</span>
+          )}
+
+          <span className="trumpSep">·</span>
+
+          <span className="trumpLabel">Bid:</span>
+          <span className="trumpValue">{bidAmount}</span>
+
+          <span className="trumpSep">·</span>
+
+          <span className="trumpLabel">Won by:</span>
+          <span className="trumpValue">{bidWinnerName}</span>
+        </div>
+      )
+    })()}
+
+    <div className="discardStatusList">
+      <div className="small" style={{ marginBottom: 6 }}>Waiting on players</div>
+      {state.players.map((_, i) => (
+        <div key={i} className="discardStatusRow">
+          <span className="discardStatusName">{playerName(i)}</span>
+          <span className="discardStatusState">{state.discardDone[i] ? '✅ Confirmed' : '⏳ Waiting'}</span>
+        </div>
+      ))}
+    </div>
 
     <hr />
 
     {net.playerIndex !== null ? (
-      <div className="small">
+      (() => {
+        const baseOrder = (state.dealtHands7?.[net.playerIndex ?? 0] ?? discardHandLocal) as Card[]
+        const cardKeyToIndex = new Map(baseOrder.map((c, i) => [cardKey(c), i]))
+        const sortByDealtOrder = (a: Card, b: Card) =>
+          (cardKeyToIndex.get(cardKey(a)) ?? 999) - (cardKeyToIndex.get(cardKey(b)) ?? 999)
+        const sortedKeepCards = [...discardHandLocal].sort(sortByDealtOrder)
+        const sortedDiscardList = [...discardPileLocal].sort(sortByDealtOrder)
+        const pi = net.playerIndex!
+        const discardsLocked = !!state.discardDone?.[pi] || discardSubmitting
+        const handleDiscardToggle = (e: React.PointerEvent, c: Card) => {
+          if (discardsLocked) return
+          e.preventDefault()
+          e.stopPropagation()
+          const id = cardKey(c)
+          const inHand = discardHandLocal.some(h => cardKey(h) === id)
+          if (inHand) {
+            const idx = discardHandLocal.findIndex(h => cardKey(h) === id)
+            if (idx === -1) return
+            const card = discardHandLocal[idx]
+            setDiscardHandLocal(prev => prev.filter((_, i) => i !== idx))
+            setDiscardPileLocal(prev => [...prev, card])
+            setDiscardSelectedIds(prev => new Set(prev).add(id))
+          } else {
+            const idx = discardPileLocal.findIndex(h => cardKey(h) === id)
+            if (idx === -1) return
+            const card = discardPileLocal[idx]
+            setDiscardPileLocal(prev => prev.filter((_, i) => i !== idx))
+            setDiscardHandLocal(prev => [...prev, card])
+            setDiscardSelectedIds(prev => {
+              const next = new Set(prev)
+              next.delete(id)
+              return next
+            })
+          }
+          send({ type: 'TOGGLE_DISCARD', playerIndex: net.playerIndex!, card: c })
+        }
+        return (
+      <div className="discardPhase small">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-          <div><strong>Keep</strong></div>
+          <div><strong>Keep</strong>{discardsLocked ? <span className="badge badgeLocked" style={{ marginLeft: 8 }}>Locked</span> : null}</div>
           <div className="small" style={{ opacity: 0.9 }}>Tap to discard</div>
         </div>
 
-        <div className="tableBox">
-          {state.hands7[net.playerIndex].map(c => (
+        <div className="tableBox discardPileGrid">
+          {sortedKeepCards.map(c => (
             <button
+              type="button"
               key={cardKey(c)}
-              className="cardBtn playable"
-              onClick={() => send({ type: 'TOGGLE_DISCARD', playerIndex: net.playerIndex!, card: c })}
+              className="cardBtn playable discardCardBtn discardNoBounce"
               title="Move to Discard"
+              disabled={discardsLocked}
+              onPointerDown={(e) => handleDiscardToggle(e, c)}
             >
-              <span className={`cardFace cardEnter ${isRedSuit(c.suit) ? 'red' : 'black'}`}>
-  <span className="corner tl"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
-  <span className="pip">{suitSymbol[c.suit]}</span>
-  <span className="corner br"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
-</span>
+              <span className={`cardFace ${isRedSuit(c.suit) ? 'red' : 'black'}`}>
+                <span className="corner tl"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
+                <span className="pip">{suitSymbol[c.suit]}</span>
+                <span className="corner br"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
+              </span>
             </button>
           ))}
-          {!state.hands7[net.playerIndex].length ? <div className="small">No cards in Keep.</div> : null}
+          {!sortedKeepCards.length ? <div className="small">No cards in Keep.</div> : null}
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginTop: 8 }}>
-          <div><strong>Discard</strong></div>
+          <div><strong>Discard</strong>{discardsLocked ? <span className="badge badgeLocked" style={{ marginLeft: 8 }}>Locked</span> : null}</div>
           <div className="small" style={{ opacity: 0.9 }}>Tap to return</div>
         </div>
 
-        <div className="tableBox">
-          {state.discardPiles[net.playerIndex].map(c => (
+        <div className="tableBox discardPileGrid">
+          {sortedDiscardList.map(c => (
             <button
+              type="button"
               key={cardKey(c)}
-              className="cardBtn playable"
-              onClick={() => send({ type: 'TOGGLE_DISCARD', playerIndex: net.playerIndex!, card: c })}
+              className="cardBtn playable discardCardBtn discardNoBounce"
               title="Move back to Keep"
+              disabled={discardsLocked}
+              onPointerDown={(e) => handleDiscardToggle(e, c)}
             >
-              <span className={`cardFace cardEnter ${isRedSuit(c.suit) ? 'red' : 'black'}`}>
-  <span className="corner tl"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
-  <span className="pip">{suitSymbol[c.suit]}</span>
-  <span className="corner br"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
-</span>
+              <span className={`cardFace ${isRedSuit(c.suit) ? 'red' : 'black'}`}>
+                <span className="corner tl"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
+                <span className="pip">{suitSymbol[c.suit]}</span>
+                <span className="corner br"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
+              </span>
             </button>
           ))}
-          {!state.discardPiles[net.playerIndex].length ? <div className="small">No discarded cards.</div> : null}
+          {!sortedDiscardList.length ? <div className="small">No discarded cards.</div> : null}
         </div>
       </div>
+        )
+      })()
     ) : (
       <div className="small">Take a seat to discard.</div>
     )}
@@ -2066,7 +2549,20 @@ useEffect(() => {
                   <div key={i}>{m}</div>
                 ))}
               </div>
+              </div>
+              </div>
             </div>
+            <div style={{ minWidth: 0 }}>
+              <div className="card" style={{ margin: 0 }}>
+                <ChatPanel
+                  title="Table Chat"
+                  messages={chatMessages}
+                  disabled={!net.socket?.connected || !roomReady}
+                  onSend={onSendChat}
+                  loading={chatLoading}
+                  error={chatError}
+                />
+              </div>
             </div>
           </div>
         </>

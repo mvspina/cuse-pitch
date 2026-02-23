@@ -76,15 +76,26 @@ export function buildAuthRouter(): Router {
   })
 
   r.post('/login', async (req, res) => {
-    const username = normalizeUsername(req.body?.username)
-    const password = String(req.body?.password ?? '')
+    const body = req.body ?? {}
+    const identifierRaw = String(body.username ?? '').trim()
+    const password = String(body.password ?? '')
 
-    const uErr = validateUsername(username)
-    if (uErr) return res.status(400).json({ ok: false, error: 'Invalid username or password.' })
+    const identifier = identifierRaw.toLowerCase()
+    const isEmail = identifier.includes('@')
+
+    if (!identifier) return res.status(400).json({ ok: false, error: 'Invalid username or password.' })
     const pErr = validatePassword(password)
     if (pErr) return res.status(400).json({ ok: false, error: 'Invalid username or password.' })
 
-    const user = await getUserByUsername(username)
+    let user: Awaited<ReturnType<typeof getUserByUsername>> = null
+    if (isEmail) {
+      user = await getUserByEmail(identifier)
+    } else {
+      const uErr = validateUsername(identifierRaw)
+      if (uErr) return res.status(400).json({ ok: false, error: 'Invalid username or password.' })
+      user = await getUserByUsername(identifier)
+    }
+
     if (!user) return res.status(401).json({ ok: false, error: 'Invalid username or password.' })
 
     const ok = bcrypt.compareSync(password, user.passwordHash)
