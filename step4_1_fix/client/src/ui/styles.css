@@ -1195,14 +1195,32 @@ body{
   border-radius: 8px;
   background: rgba(255,255,255,0.06);
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+}
+
+.trumpLabel {
+  opacity: 0.75;
   font-weight: 600;
 }
-.trumpLabel {
-  opacity: 0.7;
-}
+
 .trumpValue {
-  font-size: 16px;
+  font-weight: 700;
 }
+
+.trumpSep {
+  opacity: 0.45;
+  padding: 0 4px;
+}
+
+.trumpSymbol {
+  display: flex;
+  font-size: 16px;
+  line-height: 1;
+  font-weight: 800;
+}
+
+.trumpSymbol.red { color: #c62828; }
+.trumpSymbol.black { color: #111; }

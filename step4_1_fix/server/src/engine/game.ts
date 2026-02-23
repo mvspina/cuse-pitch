@@ -626,7 +626,15 @@ if (action.type === 'PLACE_BID') {
     if (!trick) return state
 
     const leadSuit = trick.plays.length ? trick.plays[0].card.suit : null
-    if (state.trickNumber === 1 && trick.plays.length === 0 && action.card.suit !== trump) return log(state, `First lead must be trump: ${suitLabel[trump]}.`)
+    const isFirstLeadOfHand = state.trickNumber === 1 && trick.plays.length === 0
+    if (isFirstLeadOfHand && action.card.suit !== trump) {
+      const bidWinner = state.bidWinnerIndex
+      const isBidWinnerLeading = bidWinner != null && pi === bidWinner
+      const bidderHasTrump = hand.some(c => c.suit === trump)
+      if (!(isBidWinnerLeading && !bidderHasTrump)) {
+        return log(state, `First lead must be trump: ${suitLabel[trump]}.`)
+      }
+    }
 	    // House rule: Trump is always allowed, even when you can follow the lead suit.
 	    // Only enforce follow-suit when the played card is neither lead suit nor trump.
 	    if (leadSuit && action.card.suit !== leadSuit && action.card.suit !== trump && canFollowSuit(hand, leadSuit)) {

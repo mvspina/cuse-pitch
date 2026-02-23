@@ -202,17 +202,6 @@ function teamRosterLabel(state: GameState, teamId: string): string {
   return members.join(', ')
 }
 
-function trumpLabel(trump?: string | null): string {
-  if (!trump) return 'Not selected'
-  switch (trump) {
-    case 'H': return '♥ Hearts'
-    case 'D': return '♦ Diamonds'
-    case 'C': return '♣ Clubs'
-    case 'S': return '♠ Spades'
-    default: return String(trump)
-  }
-}
-
 function categoryName(c: string): string {
   if (c === 'HIGH') return 'High'
   if (c === 'LOW') return 'Low'
@@ -2272,10 +2261,41 @@ useEffect(() => {
       </button>
     </div>
 
-    <div className="trumpBanner">
-      <span className="trumpLabel">Trump:</span>
-      <span className="trumpValue">{trumpLabel(state.trump)}</span>
-    </div>
+    {(() => {
+      const trump = state.trump
+      const trumpSym = trump ? suitSymbol[trump] : ''
+      const trumpName = trump ? suitLabel[trump] : 'Not selected'
+      const trumpIsRed = trump === 'H' || trump === 'D'
+
+      const bidWinnerName =
+        state.bidWinnerIndex != null ? playerName(state.bidWinnerIndex) : 'None'
+      const bidAmount =
+        state.winningBid != null ? String(state.winningBid) : 'None'
+
+      return (
+        <div className="trumpBanner">
+          <span className="trumpLabel">Trump:</span>
+          {trump ? (
+            <>
+              <span className={`trumpSymbol ${trumpIsRed ? 'red' : 'black'}`}>{trumpSym}</span>
+              <span className="trumpValue">{trumpName}</span>
+            </>
+          ) : (
+            <span className="trumpValue">{trumpName}</span>
+          )}
+
+          <span className="trumpSep">·</span>
+
+          <span className="trumpLabel">Bid:</span>
+          <span className="trumpValue">{bidAmount}</span>
+
+          <span className="trumpSep">·</span>
+
+          <span className="trumpLabel">Won by:</span>
+          <span className="trumpValue">{bidWinnerName}</span>
+        </div>
+      )
+    })()}
 
     <div className="discardStatusList">
       <div className="small" style={{ marginBottom: 6 }}>Waiting on players</div>
