@@ -1616,8 +1616,8 @@ useEffect(() => {
                   ) : (
                     <>
                       <div style={{ minWidth: 180 }}>
-                        <label style={{ display: 'block' }}>Username</label>
-                        <input value={authUsername} onChange={e => setAuthUsername(e.target.value)} placeholder="username" />
+                        <label style={{ display: 'block' }}>{authMode === 'login' ? 'Username or email' : 'Username'}</label>
+                        <input value={authUsername} onChange={e => setAuthUsername(e.target.value)} placeholder={authMode === 'login' ? 'Username or email' : 'username'} />
                       </div>
                       {authMode === 'signup' ? (
                         <div style={{ minWidth: 260 }}>

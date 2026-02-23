@@ -1224,3 +1224,20 @@ body{
 
 .trumpSymbol.red { color: #c62828; }
 .trumpSymbol.black { color: #111; }
+
+.discardCardBtn {
+  transition: none !important;
+  transform: none !important;
+}
+
+.discardCardBtn:active {
+  transform: none !important;
+}
+
+.discardCardBtn:focus {
+  outline: none;
+}
+
+.discardCardBtn:focus-visible {
+  outline: none;
+}

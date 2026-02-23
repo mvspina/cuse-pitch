@@ -14,11 +14,11 @@ export type SessionUser = {
 }
 
 export async function getUserByUsername(username: string): Promise<DbUser | null> {
-  const u = (username || '').trim()
+  const u = (username || '').trim().toLowerCase()
   if (!u) return null
   const pool = getPool()
   const res = await pool.query(
-    'SELECT id, username, email, password_hash AS "passwordHash", created_at AS "createdAt" FROM users WHERE username = $1',
+    'SELECT id, username, email, password_hash AS "passwordHash", created_at AS "createdAt" FROM users WHERE LOWER(username) = $1',
     [u]
   )
   const row = res.rows[0]
