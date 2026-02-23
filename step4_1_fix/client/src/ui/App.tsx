@@ -366,6 +366,9 @@ export default function App() {
   const chatLoadedForRoomRef = useRef<string | null>(null)
 
   const [discardSelectedIds, setDiscardSelectedIds] = useState<Set<string>>(() => new Set())
+  const [discardHandLocal, setDiscardHandLocal] = useState<Card[]>([])
+  const [discardPileLocal, setDiscardPileLocal] = useState<Card[]>([])
+  const discardLocalInitializedRef = useRef(false)
   const lastDiscardHandSigRef = useRef<string>('')
   const lastPhaseRef = useRef<string>('')
   const [discardSubmitting, setDiscardSubmitting] = useState(false)
@@ -373,6 +376,25 @@ export default function App() {
   const apiBase = useMemo(() => {
     return window.location.origin
   }, [])
+
+  useEffect(() => {
+    const phase = state?.phase
+    const pi = net.playerIndex
+    if (phase === 'DISCARD' && pi !== null && !discardLocalInitializedRef.current) {
+      const serverHand = state.hands7?.[pi]
+      const dealt = state.dealtHands7?.[pi]
+      const source = (serverHand?.length ? serverHand : dealt) ?? []
+      setDiscardHandLocal(source.map(c => ({ ...c })))
+      setDiscardPileLocal([])
+      setDiscardSelectedIds(new Set())
+      discardLocalInitializedRef.current = true
+    }
+    if (phase !== 'DISCARD') {
+      discardLocalInitializedRef.current = false
+      setDiscardHandLocal([])
+      setDiscardPileLocal([])
+    }
+  }, [state?.phase, state?.hands7, state?.dealtHands7, net.playerIndex])
 
   useEffect(() => {
     if (typeof localStorage === 'undefined') return
@@ -2238,29 +2260,36 @@ useEffect(() => {
 
     {net.playerIndex !== null ? (
       (() => {
-        const hand = state.hands7[net.playerIndex ?? 0] ?? []
-        const serverDiscard = state.discardPiles[net.playerIndex] ?? []
-        const keepCards = hand.filter(c => !discardSelectedIds.has(cardKey(c)))
-        const discardCards = hand.filter(c => discardSelectedIds.has(cardKey(c)))
-        const inServerNotInHand = serverDiscard.filter(c => !hand.some(h => cardKey(h) === cardKey(c)))
-        const discardList = [...discardCards, ...inServerNotInHand]
-        const baseOrder = (state.dealtHands7?.[net.playerIndex ?? 0] ?? hand) as Card[]
+        const baseOrder = (state.dealtHands7?.[net.playerIndex ?? 0] ?? discardHandLocal) as Card[]
         const cardKeyToIndex = new Map(baseOrder.map((c, i) => [cardKey(c), i]))
         const sortByDealtOrder = (a: Card, b: Card) =>
           (cardKeyToIndex.get(cardKey(a)) ?? 999) - (cardKeyToIndex.get(cardKey(b)) ?? 999)
-        const sortedKeepCards = [...keepCards].sort(sortByDealtOrder)
-        const sortedDiscardCards = [...discardCards].sort(sortByDealtOrder)
-        const sortedDiscardList = [...sortedDiscardCards, ...inServerNotInHand]
+        const sortedKeepCards = [...discardHandLocal].sort(sortByDealtOrder)
+        const sortedDiscardList = [...discardPileLocal].sort(sortByDealtOrder)
         const handleDiscardToggle = (e: React.PointerEvent, c: Card) => {
           e.preventDefault()
           e.stopPropagation()
           const id = cardKey(c)
-          setDiscardSelectedIds(prev => {
-            const next = new Set(prev)
-            if (next.has(id)) next.delete(id)
-            else next.add(id)
-            return next
-          })
+          const inHand = discardHandLocal.some(h => cardKey(h) === id)
+          if (inHand) {
+            const idx = discardHandLocal.findIndex(h => cardKey(h) === id)
+            if (idx === -1) return
+            const card = discardHandLocal[idx]
+            setDiscardHandLocal(prev => prev.filter((_, i) => i !== idx))
+            setDiscardPileLocal(prev => [...prev, card])
+            setDiscardSelectedIds(prev => new Set(prev).add(id))
+          } else {
+            const idx = discardPileLocal.findIndex(h => cardKey(h) === id)
+            if (idx === -1) return
+            const card = discardPileLocal[idx]
+            setDiscardPileLocal(prev => prev.filter((_, i) => i !== idx))
+            setDiscardHandLocal(prev => [...prev, card])
+            setDiscardSelectedIds(prev => {
+              const next = new Set(prev)
+              next.delete(id)
+              return next
+            })
+          }
           send({ type: 'TOGGLE_DISCARD', playerIndex: net.playerIndex!, card: c })
         }
         return (
