@@ -91,3 +91,10 @@ export async function updateUserPassword(userId: number, passwordHash: string): 
   const pool = getPool()
   await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [passwordHash, userId])
 }
+
+/** Returns only usernames from users table (no PII). For admin use. */
+export async function getAllUsernames(): Promise<string[]> {
+  const pool = getPool()
+  const res = await pool.query<{ username: string }>('SELECT username FROM users ORDER BY username')
+  return res.rows.map((r) => r.username)
+}

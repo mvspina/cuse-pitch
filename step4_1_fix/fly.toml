@@ -11,9 +11,10 @@ primary_region = 'iad'
 
 [env]
   NODE_ENV = 'production'
+  PORT = '3001'
 
 [http_service]
-  internal_port = 3000
+  internal_port = 3001
   force_https = true
   auto_stop_machines = false
   auto_start_machines = true

@@ -2,6 +2,8 @@
   font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif;
   line-height: 1.35;
   color: #111;
+  --card-w: 96px;
+  --card-h: 140px;
 }
 
 body {
@@ -73,6 +75,23 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   border: 1px solid rgba(0,0,0,0.10);
   border-radius: 14px;
   padding: 12px;
+}
+
+/* Discard phase: two trays, 3-column grid per tray */
+.discardPileGrid {
+  display: grid !important;
+  grid-template-columns: repeat(3, max-content);
+  gap: 10px;
+  align-content: start;
+  justify-content: start;
+}
+
+/* DISCARD-only: subtle fade */
+.discardPhase .cardBtn {
+  transition: opacity 120ms ease-out;
+}
+.discardPhase .cardBtn.discardingOut {
+  opacity: 0.25;
 }
 
 hr { border: none; border-top: 1px solid #eef0f6; margin: 12px 0; }
@@ -177,9 +196,12 @@ hr { border: none; border-top: 1px solid #eef0f6; margin: 12px 0; }
   border: 1px solid rgba(0,0,0,0.12);
   margin-right: 8px;
   margin-bottom: 8px;
-  transform: translateY(0);
+}
+
+.cardEnter {
   animation: cardIn 140ms ease-out both;
 }
+
 @keyframes cardIn {
   from { transform: translateY(6px); opacity: 0.0; }
   to { transform: translateY(0); opacity: 1.0; }
@@ -392,7 +414,7 @@ body{
 .cardTile.selected{ transform: translateY(-6px); box-shadow: 0 0 0 3px rgba(242,200,75,0.35), 0 16px 22px rgba(0,0,0,0.18); }
 
 .cardEnter{
-  animation: cardEnter 220ms ease-out both;
+  animation: cardIn 140ms ease-out both;
 }
 @keyframes cardEnter{
   from{ transform: translateY(10px) scale(0.98); opacity: 0; }
@@ -532,7 +554,7 @@ body{
 
 /* Stronger entrance */
 .cardEnter{
-  animation: cardEnter 240ms ease-out;
+  animation: cardIn 140ms ease-out both;
 }
 @keyframes cardEnter{
   from{ transform: translateY(12px) scale(0.96); opacity: 0; }
@@ -844,7 +866,12 @@ body{
 }
 
 /* Mobile ergonomics */
-.cardBtn { touch-action: manipulation; }
+.cardBtn,
+.cardFace {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
 
 @media (max-width: 520px) {
   .container { padding: 12px; }

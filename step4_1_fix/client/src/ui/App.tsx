@@ -12,6 +12,7 @@ type ChatMessage = { id: string; ts: number; userId?: number | null; name: strin
 const suitOptions: Suit[] = ['S','H','D','C']
 const TOKEN_KEY = 'cuse-pitch-token'
 const ROOM_KEY = 'cuse-pitch-room'
+const PENDING_JOIN_ROOM = 'cuse-pitch-pending-join-room'
 const SFX_KEY = 'cuse-pitch-sfx-enabled'
 const AUTH_USER_KEY = 'cuse-pitch-auth-user'
 
@@ -324,6 +325,13 @@ export default function App() {
     }
   })
 
+  const [autoJoinStatus, setAutoJoinStatus] = useState<'idle' | 'joining' | 'failed' | 'success'>('idle')
+  const [autoJoinError, setAutoJoinError] = useState<string>('')
+  const autoJoinStartedRef = useRef(false)
+  const joinCodeInputRef = useRef<HTMLInputElement>(null)
+
+  const isAuthed = Boolean(authUser?.id)
+
   const [inviteLink, setInviteLink] = useState<string | null>(null)
   const inviteShareSupported = useMemo(() => typeof (navigator as any)?.share === 'function', [])
   const [profileOpen, setProfileOpen] = useState(false)
@@ -357,9 +365,39 @@ export default function App() {
   const [chatLoading, setChatLoading] = useState(false)
   const chatLoadedForRoomRef = useRef<string | null>(null)
 
+  const [discardSelectedIds, setDiscardSelectedIds] = useState<Set<string>>(() => new Set())
+  const lastDiscardHandSigRef = useRef<string>('')
+  const lastPhaseRef = useRef<string>('')
+  const [discardSubmitting, setDiscardSubmitting] = useState(false)
+
   const apiBase = useMemo(() => {
     return window.location.origin
   }, [])
+
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return
+    if (localStorage.getItem('DEBUG_JOIN') === '1') {
+      console.log('[JOINLINK] path=', window.location.pathname, 'code=', pendingInviteCode)
+    }
+  }, [pendingInviteCode])
+
+  useEffect(() => {
+    try {
+      const path = (typeof window !== 'undefined' && window.location.pathname) || ''
+      const m = path.match(/^\/join\/([A-Za-z0-9]{5})\/?$/i)
+      if (m?.[1]) {
+        const code = m[1].toUpperCase()
+        localStorage.setItem(PENDING_JOIN_ROOM, code)
+      }
+    } catch {}
+  }, [])
+
+  useEffect(() => {
+    if (isAuthed) return
+    const fromStorage = typeof localStorage !== 'undefined' ? localStorage.getItem(PENDING_JOIN_ROOM) : null
+    const hasPending = !!(pendingInviteCode || (fromStorage && fromStorage.trim()))
+    if (hasPending && !authMode) setAuthMode('login')
+  }, [isAuthed, pendingInviteCode, authMode])
 
 
 
@@ -428,6 +466,10 @@ export default function App() {
         localStorage.setItem(AUTH_USER_KEY, JSON.stringify(u))
         setAuthMode(null)
         setAuthPassword('')
+        try {
+          const pending = localStorage.getItem(PENDING_JOIN_ROOM)
+          if (pending && pending.trim()) setPendingInviteCode(pending.trim().toUpperCase())
+        } catch {}
       }
     } catch (e: any) {
       setAuthError(e?.message || 'Auth failed')
@@ -547,9 +589,25 @@ const prevPlaysLenRef = useRef<number>(0)
   const [trumpRippleTick, setTrumpRippleTick] = useState(0)
 
   useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search)
+      const t = params.get('t')
+      if (t && typeof t === 'string' && t.length > 10 && !localStorage.getItem(TOKEN_KEY)) {
+        localStorage.setItem(TOKEN_KEY, t)
+      }
+    } catch {}
+
     const serverUrl = (import.meta.env.VITE_SOCKET_URL as string | undefined)?.trim() || window.location.origin
     const s = io(serverUrl, { transports: ['websocket', 'polling'], withCredentials: true })
     setNet(n => ({ ...n, socket: s }))
+
+    const setUrlToken = (token: string) => {
+      try {
+        const u = new URL(window.location.href)
+        u.searchParams.set('t', token)
+        window.history.replaceState({}, '', u.pathname + '?' + u.searchParams.toString() + (u.hash || ''))
+      } catch {}
+    }
 
     const attemptReconnect = () => {
       const storedToken = localStorage.getItem(TOKEN_KEY) || ''
@@ -597,12 +655,7 @@ const prevPlaysLenRef = useRef<number>(0)
 
     s.on('connect', () => {
       setNet(n => ({ ...n, connected: true, error: null }))
-      // Invite links should take priority over any stored room.
-      if (pendingInviteCode) {
-        joinByInvite(pendingInviteCode, s)
-      } else {
-        attemptReconnect()
-      }
+      if (!pendingInviteCode) attemptReconnect()
     })
     s.on('disconnect', () => setNet(n => ({ ...n, connected: false })))
 
@@ -622,7 +675,35 @@ const prevPlaysLenRef = useRef<number>(0)
       }))
       setState(payload.state)
 
-      if (payload.token) localStorage.setItem(TOKEN_KEY, payload.token)
+      const pi = payload.playerIndex
+      const phase = payload.state?.phase
+      const discardDone = payload.state?.discardDone
+      if (phase !== 'DISCARD') {
+        setDiscardSelectedIds(new Set())
+        lastDiscardHandSigRef.current = ''
+      } else {
+        if (lastPhaseRef.current !== 'DISCARD') {
+          setDiscardSelectedIds(new Set())
+        }
+        if (pi != null && discardDone?.[pi]) {
+          setDiscardSelectedIds(new Set())
+          const hand = payload.state.hands7?.[pi] ?? []
+          lastDiscardHandSigRef.current = hand.map(cardKey).sort().join('|')
+        }
+      }
+      lastPhaseRef.current = phase ?? ''
+      setDiscardSubmitting(false)
+
+      if (typeof localStorage !== 'undefined' && localStorage.getItem('DEBUG_STATE') === '1') {
+        const handLen = (payload.state?.hands7 ?? payload.state?.hands6)?.[payload.playerIndex ?? -1]?.length ?? 0
+        console.log('[STATE] roomCode=%s playerIndex=%s handLen=%s phase=%s', payload.roomCode, payload.playerIndex, handLen, payload.state?.phase)
+      }
+
+      const existing = localStorage.getItem(TOKEN_KEY) || ''
+      if (payload.token && (payload.playerIndex !== null || !existing)) {
+        localStorage.setItem(TOKEN_KEY, payload.token)
+        setUrlToken(payload.token)
+      }
       if (payload.roomCode) localStorage.setItem(ROOM_KEY, payload.roomCode)
     })
 
@@ -652,6 +733,17 @@ const prevPlaysLenRef = useRef<number>(0)
     return () => { s.disconnect() }
   }, [])
 
+  useEffect(() => {
+    if (!isAuthed) return
+    const code = pendingInviteCode || (typeof localStorage !== 'undefined' ? (localStorage.getItem(PENDING_JOIN_ROOM) || '').trim().toUpperCase() : '') || null
+    if (!code || !net.socket?.connected) return
+    if (autoJoinStartedRef.current) return
+    autoJoinStartedRef.current = true
+    setAutoJoinStatus('joining')
+    const s = net.socket
+    void attemptAutoJoin(code, s)
+  }, [isAuthed, pendingInviteCode, net.connected, net.socket])
+
   const currentHigh = useMemo(() => state ? currentHighBid(state.bidHistory) : null, [state?.bidHistory])
   const me = (state && net.playerIndex !== null) ? state.players[net.playerIndex] : null
   const dealer = state ? state.players[state.dealerIndex] : null
@@ -670,6 +762,15 @@ const prevPlaysLenRef = useRef<number>(0)
   }
 
   const roomReady = !!(net.roomCode && state)
+
+  const effectivePendingCode = useMemo(() => {
+    try {
+      const fromStorage = typeof localStorage !== 'undefined' ? localStorage.getItem(PENDING_JOIN_ROOM) : null
+      const s = (fromStorage || '').trim().toUpperCase()
+      if (s) return s
+    } catch {}
+    return pendingInviteCode || null
+  }, [pendingInviteCode])
 
   useEffect(() => {
     if (roomReady) return
@@ -797,7 +898,9 @@ const prevPlaysLenRef = useRef<number>(0)
     net.socket.emit(event, payload, (resp: any) => {
       if (!resp?.ok) {
         const msg = resp?.error ?? 'Request failed'
+        console.error('[RPC]', event, 'failed:', msg)
         setNet(n => ({ ...n, error: msg }))
+        showToast(msg)
         onErr?.(msg)
         return
       }
@@ -852,49 +955,59 @@ const prevPlaysLenRef = useRef<number>(0)
       return
     }
     setHomeBusy('join')
+    const storedRoom = localStorage.getItem(ROOM_KEY) || ''
+    const storedToken = localStorage.getItem(TOKEN_KEY) || ''
+    const payload: { roomCode: string; name: string; spectate?: boolean; token?: string } = {
+      roomCode: code,
+      name: (authUser?.username || myName || 'Player').trim() || 'Player',
+      spectate: watchOnly,
+    }
+    if (storedRoom === code && storedToken) payload.token = storedToken
     rpc(
       'joinRoom',
-      { roomCode: code, name: (authUser?.username || myName || 'Player').trim() || 'Player', spectate: watchOnly },
+      payload,
       (resp) => {
         try {
           localStorage.setItem(ROOM_KEY, resp.roomCode)
           localStorage.setItem(TOKEN_KEY, resp.token)
         } catch {}
-        setNet(n => ({ ...n, roomCode: resp.roomCode, token: resp.token, playerIndex: resp.playerIndex ?? n.playerIndex, kickedMessage: undefined }))
-        net.socket?.emit('reconnectRoom', { roomCode: resp.roomCode, token: resp.token }, () => {})
+        setNet(n => ({ ...n, roomCode: resp.roomCode, token: resp.token, playerIndex: resp.playerIndex ?? n.playerIndex, kickedMessage: undefined, error: resp.error ?? null }))
         setHomeBusy(null)
       },
       () => setHomeBusy(null)
     )
   }
 
-  function joinByInvite(inviteCode: string, socketOverride?: Socket) {
+  function joinByInvite(inviteCode: string, socketOverride?: Socket): Promise<{ ok: boolean; error?: string }> {
     const s = socketOverride || net.socket
-    if (!s) return
-    if (!net.connected || homeBusy) return
+    if (!s) return Promise.resolve({ ok: false, error: 'No socket' })
+    const connected = socketOverride ? socketOverride.connected : net.connected
+    if (!connected || homeBusy) return Promise.resolve({ ok: false, error: 'Not connected or busy' })
     if (!nameValid) {
       setNet(n => ({ ...n, error: 'Please enter a name (1 to 18 characters).' }))
-      return
+      return Promise.resolve({ ok: false, error: 'Please enter a name (1 to 18 characters).' })
     }
-    const code = (inviteCode || '').toUpperCase().trim()
+    const code = (inviteCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '').trim()
     if (!code) {
       setNet(n => ({ ...n, error: 'Invalid invite link.' }))
-      return
+      return Promise.resolve({ ok: false, error: 'Invalid invite link.' })
     }
-    setHomeBusy('join')
-    s.emit('joinInvite', { inviteCode: code, name: (authUser?.username || myName || 'Player').trim() || 'Player', spectate: watchOnly }, (resp: any) => {
-      if (!resp?.ok) {
-        const msg = resp?.error ?? 'Invite join failed'
-        setNet(n => ({ ...n, error: msg }))
-        setHomeBusy(null)
-        return
-      }
+    const name = (authUser?.username || myName || 'Player').trim() || 'Player'
+    const storedRoom = localStorage.getItem(ROOM_KEY) || ''
+    const existingToken = localStorage.getItem(TOKEN_KEY) || ''
+
+    const onJoinSuccess = (resp: any) => {
       try {
         localStorage.setItem(ROOM_KEY, resp.roomCode)
         localStorage.setItem(TOKEN_KEY, resp.token)
+        localStorage.removeItem(PENDING_JOIN_ROOM)
       } catch {}
-      setNet(n => ({ ...n, roomCode: resp.roomCode, token: resp.token, playerIndex: resp.playerIndex ?? n.playerIndex, isHost: !!resp.isHost, kickedMessage: undefined }))
-      s.emit('reconnectRoom', { roomCode: resp.roomCode, token: resp.token }, () => {})
+      try {
+        const u = new URL(window.location.href)
+        u.searchParams.set('t', resp.token)
+        window.history.replaceState({}, '', u.pathname + '?' + u.searchParams.toString() + (u.hash || ''))
+      } catch {}
+      setNet(n => ({ ...n, roomCode: resp.roomCode, token: resp.token, playerIndex: resp.playerIndex ?? n.playerIndex, isHost: !!resp.isHost, kickedMessage: undefined, error: resp.error ?? null }))
       setPendingInviteCode(null)
       try {
         if (window.location.pathname.startsWith('/join/')) {
@@ -909,7 +1022,97 @@ const prevPlaysLenRef = useRef<number>(0)
         }
       } catch {}
       setHomeBusy(null)
+    }
+
+    setHomeBusy('join')
+
+    return new Promise<{ ok: boolean; error?: string }>((resolve) => {
+      const resolveWithError = (err: string) => {
+        setNet(n => ({ ...n, error: err }))
+        setHomeBusy(null)
+        resolve({ ok: false, error: err })
+      }
+      try {
+        if (code.length === 5) {
+          const joinPayload: { roomCode: string; name: string; spectate?: boolean; token?: string } = {
+            roomCode: code,
+            name: name.trim() || 'Player',
+            spectate: watchOnly,
+          }
+          if (storedRoom === code && existingToken) joinPayload.token = existingToken
+          s.emit('joinRoom', joinPayload, (resp: any) => {
+            try {
+              if (!resp?.ok) {
+                const msg = resp?.error ?? 'Join failed'
+                resolveWithError(msg)
+                return
+              }
+              onJoinSuccess(resp)
+              resolve({ ok: true })
+            } catch (e) {
+              resolveWithError('Network error joining room')
+            }
+          })
+          return
+        }
+        s.emit('joinInvite', { inviteCode: code, name, spectate: watchOnly }, (resp: any) => {
+          try {
+            if (!resp?.ok) {
+              const msg = resp?.error ?? 'Invite not found or expired. Ask the host for the room code (e.g. /join/ABCDE).'
+              resolveWithError(msg)
+              return
+            }
+            onJoinSuccess(resp)
+            resolve({ ok: true })
+          } catch (e) {
+            resolveWithError('Network error joining room')
+          }
+        })
+      } catch (e) {
+        resolveWithError('Network error joining room')
+      }
     })
+  }
+
+  async function attemptAutoJoin(code: string, s: Socket) {
+    setAutoJoinStatus('joining')
+    setAutoJoinError('')
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('DEBUG_JOIN') === '1') {
+      console.log('[DEBUG_JOIN] parsed code=', code, 'join attempt started')
+    }
+    const delays = [300, 600, 1200, 2000, 3000]
+    for (let attempt = 0; attempt <= delays.length; attempt++) {
+      const result = await joinByInvite(code, s)
+      if (typeof localStorage !== 'undefined' && localStorage.getItem('DEBUG_JOIN') === '1') {
+        console.log('[DEBUG_JOIN] result.ok=', result.ok, 'error=', result.error)
+      }
+      if (result.ok) {
+        setAutoJoinStatus('success')
+        setAutoJoinError('')
+        try {
+          localStorage.removeItem(PENDING_JOIN_ROOM)
+        } catch {}
+        setPendingInviteCode(null)
+        window.history.replaceState({}, '', '/')
+        return
+      }
+      const err = result.error ?? 'Join failed'
+      const isRoomNotFound = /room not found/i.test(err)
+      if (isRoomNotFound || attempt >= delays.length) {
+        setAutoJoinStatus('failed')
+        setAutoJoinError(err)
+        setNet(n => ({ ...n, error: err }))
+        if (isRoomNotFound && code) {
+          setJoinCode(code)
+          setTimeout(() => {
+            joinCodeInputRef.current?.focus()
+            joinCodeInputRef.current?.closest('.card')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+          }, 100)
+        }
+        return
+      }
+      await new Promise(r => setTimeout(r, delays[attempt]))
+    }
   }
 
   function takeSeat(seat: number) {
@@ -957,14 +1160,9 @@ const prevPlaysLenRef = useRef<number>(0)
 
   function hostInvite() {
     if (!net.roomCode || !net.token) return
-    rpc('createInvite', { roomCode: net.roomCode, token: net.token }, (resp) => {
-      const inviteCode = (resp?.inviteCode || '').toString().trim()
-      if (!inviteCode) return
-      const link = `${window.location.origin}/join/${inviteCode}`
-      setInviteLink(link)
-      // Default action: copy immediately (old behavior), but now also show the link in a modal.
-      void copyToClipboard(link)
-    })
+    const link = `${window.location.origin}/join/${net.roomCode}`
+    setInviteLink(link)
+    void copyToClipboard(link)
   }
 
 
@@ -1076,11 +1274,11 @@ const prevPlaysLenRef = useRef<number>(0)
 
   const [confettiSeed, setConfettiSeed] = useState<number>(1)
   const [confettiOn, setConfettiOn] = useState<boolean>(false)
-  const lastPhaseRef = useRef<string | null>(null)
+  const lastUiPhaseRef = useRef<string | null>(null)
   useEffect(() => {
     const phase = state?.phase ?? null
-    const prev = lastPhaseRef.current
-    lastPhaseRef.current = phase
+    const prev = lastUiPhaseRef.current
+    lastUiPhaseRef.current = phase
     if (phase === 'GAME_END' && prev !== 'GAME_END') {
       setConfettiSeed(Date.now())
       setConfettiOn(true)
@@ -1275,7 +1473,7 @@ useEffect(() => {
         </div>
         <div className="small" style={{ color: 'rgba(255,255,255,0.92)', marginTop: 6, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <span>
-            Socket: <strong>{net.connected ? 'Connected' : 'Disconnected'}</strong>
+            Socket: <strong>{net.connected ? 'Connected' : 'Reconnecting…'}</strong>
             {roomReady ? <> | Room: <strong>{net.roomCode}</strong> | You: <strong>{net.playerIndex !== null ? playerName(net.playerIndex) : 'Spectator'}</strong></> : null}
             {net.isHost ? <> | <strong>Host</strong></> : null}
           </span>
@@ -1285,6 +1483,11 @@ useEffect(() => {
             </button>
           ) : null}
         </div>
+        {roomReady && net.playerIndex === null ? (
+          <div className="small" style={{ marginTop: 6, padding: '8px 10px', background: 'rgba(255,255,255,0.1)', borderRadius: 8 }}>
+            <strong>Spectating</strong> — Take a seat to play.
+          </div>
+        ) : null}
         {net.error ? (
           <div className="small" style={{ color: '#ffd1d1', marginTop: 6 }}>
             Error: {net.error}
@@ -1301,6 +1504,33 @@ useEffect(() => {
             </div>
           ) : null}
           {net.error ? (<div className="errorBox" style={{ marginBottom: 12 }}>{net.error}</div>) : null}
+          {effectivePendingCode && autoJoinStatus === 'joining' ? (
+            <div className="banner" style={{ marginBottom: 12 }}>
+              Joining room {effectivePendingCode}…
+            </div>
+          ) : null}
+          {effectivePendingCode && autoJoinStatus === 'failed' ? (
+            <div className="errorBox" style={{ marginBottom: 12 }}>
+              Could not join room {effectivePendingCode}: {autoJoinError || net.error || 'Unknown error'}. The room may have ended. Ask the host to create a new room and send a new link.
+              <div style={{ marginTop: 8 }}>
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={() => {
+                    setJoinCode(effectivePendingCode ?? '')
+                    joinCodeInputRef.current?.focus()
+                  }}
+                >
+                  Enter code manually
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {!isAuthed && effectivePendingCode ? (
+            <div className="banner" style={{ marginBottom: 12 }}>
+              Log in to join room {effectivePendingCode}.
+            </div>
+          ) : null}
 
           <div className="bannerRow" style={{ marginBottom: 12 }}>
             <div className="banner" style={{ alignItems: 'stretch' }}>
@@ -1415,7 +1645,14 @@ useEffect(() => {
                   <div style={{ height: 10 }} />
 
                   <label>Room code</label>
-                  <input value={joinCode} onChange={e => setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))} onKeyDown={e => { if (e.key === 'Enter' && net.connected && !homeBusy && joinCodeValid) joinRoom() }} placeholder="ABCDE" onBlur={() => { if (joinCode !== normalizedJoinCode) setJoinCode(normalizedJoinCode) }} />
+                  <input
+                    ref={joinCodeInputRef}
+                    value={joinCode}
+                    onChange={e => setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+                    onKeyDown={e => { if (e.key === 'Enter' && net.connected && !homeBusy && joinCodeValid) joinRoom() }}
+                    placeholder="ABCDE"
+                    onBlur={() => { if (joinCode !== normalizedJoinCode) setJoinCode(normalizedJoinCode) }}
+                  />
 
                   <div style={{ marginTop: 10 }}>
                     <label className="pill" style={{ cursor: 'pointer' }}>
@@ -1975,8 +2212,11 @@ useEffect(() => {
     <div className="row">
       <button
         className="primary"
-        onClick={() => send({ type: 'CONFIRM_DISCARD', playerIndex: net.playerIndex! })}
-        disabled={net.playerIndex === null || state.discardDone[net.playerIndex]}
+        onClick={() => {
+          setDiscardSubmitting(true)
+          send({ type: 'CONFIRM_DISCARD', playerIndex: net.playerIndex! })
+        }}
+        disabled={net.playerIndex === null || state.discardDone[net.playerIndex] || discardSubmitting}
       >
         Confirm Discards
       </button>
@@ -1997,28 +2237,49 @@ useEffect(() => {
     <hr />
 
     {net.playerIndex !== null ? (
-      <div className="small">
+      (() => {
+        const hand = state.hands7[net.playerIndex ?? 0] ?? []
+        const serverDiscard = state.discardPiles[net.playerIndex] ?? []
+        const keepCards = hand.filter(c => !discardSelectedIds.has(cardKey(c)))
+        const discardCards = hand.filter(c => discardSelectedIds.has(cardKey(c)))
+        const inServerNotInHand = serverDiscard.filter(c => !hand.some(h => cardKey(h) === cardKey(c)))
+        const discardList = [...discardCards, ...inServerNotInHand]
+        const handleDiscardToggle = (e: React.PointerEvent, c: Card) => {
+          e.preventDefault()
+          e.stopPropagation()
+          const id = cardKey(c)
+          setDiscardSelectedIds(prev => {
+            const next = new Set(prev)
+            if (next.has(id)) next.delete(id)
+            else next.add(id)
+            return next
+          })
+          send({ type: 'TOGGLE_DISCARD', playerIndex: net.playerIndex!, card: c })
+        }
+        return (
+      <div className="discardPhase small">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
           <div><strong>Keep</strong></div>
           <div className="small" style={{ opacity: 0.9 }}>Tap to discard</div>
         </div>
 
-        <div className="tableBox">
-          {state.hands7[net.playerIndex].map(c => (
+        <div className="tableBox discardPileGrid">
+          {keepCards.map(c => (
             <button
+              type="button"
               key={cardKey(c)}
-              className="cardBtn playable"
-              onClick={() => send({ type: 'TOGGLE_DISCARD', playerIndex: net.playerIndex!, card: c })}
+              className="cardBtn playable discardCardBtn"
               title="Move to Discard"
+              onPointerDown={(e) => handleDiscardToggle(e, c)}
             >
-              <span className={`cardFace cardEnter ${isRedSuit(c.suit) ? 'red' : 'black'}`}>
-  <span className="corner tl"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
-  <span className="pip">{suitSymbol[c.suit]}</span>
-  <span className="corner br"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
-</span>
+              <span className={`cardFace ${isRedSuit(c.suit) ? 'red' : 'black'}`}>
+                <span className="corner tl"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
+                <span className="pip">{suitSymbol[c.suit]}</span>
+                <span className="corner br"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
+              </span>
             </button>
           ))}
-          {!state.hands7[net.playerIndex].length ? <div className="small">No cards in Keep.</div> : null}
+          {!keepCards.length ? <div className="small">No cards in Keep.</div> : null}
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginTop: 8 }}>
@@ -2026,24 +2287,27 @@ useEffect(() => {
           <div className="small" style={{ opacity: 0.9 }}>Tap to return</div>
         </div>
 
-        <div className="tableBox">
-          {state.discardPiles[net.playerIndex].map(c => (
+        <div className="tableBox discardPileGrid">
+          {discardList.map(c => (
             <button
+              type="button"
               key={cardKey(c)}
-              className="cardBtn playable"
-              onClick={() => send({ type: 'TOGGLE_DISCARD', playerIndex: net.playerIndex!, card: c })}
+              className="cardBtn playable discardCardBtn"
               title="Move back to Keep"
+              onPointerDown={(e) => handleDiscardToggle(e, c)}
             >
-              <span className={`cardFace cardEnter ${isRedSuit(c.suit) ? 'red' : 'black'}`}>
-  <span className="corner tl"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
-  <span className="pip">{suitSymbol[c.suit]}</span>
-  <span className="corner br"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
-</span>
+              <span className={`cardFace ${isRedSuit(c.suit) ? 'red' : 'black'}`}>
+                <span className="corner tl"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
+                <span className="pip">{suitSymbol[c.suit]}</span>
+                <span className="corner br"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
+              </span>
             </button>
           ))}
-          {!state.discardPiles[net.playerIndex].length ? <div className="small">No discarded cards.</div> : null}
+          {!discardList.length ? <div className="small">No discarded cards.</div> : null}
         </div>
       </div>
+        )
+      })()
     ) : (
       <div className="small">Take a seat to discard.</div>
     )}
