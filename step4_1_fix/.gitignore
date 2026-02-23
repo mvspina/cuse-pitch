@@ -12,3 +12,5 @@ client/dist
 .env
 backups/
 
+client/.env*
+!client/.env.example
