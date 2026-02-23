@@ -1241,3 +1241,37 @@ body{
 .discardCardBtn:focus-visible {
   outline: none;
 }
+
+/* DISCARD UI: eliminate tap "bounce" on first move */
+.discardNoBounce,
+.discardNoBounce:active,
+.discardNoBounce:focus {
+  transform: none !important;
+  transition: none !important;
+  animation: none !important;
+}
+
+/* If there is an inner card face element that animates, stop it too */
+.discardNoBounce * {
+  animation: none !important;
+  transition: none !important;
+}
+
+/* Avoid mobile tap highlight weirdness */
+.discardNoBounce {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* DISCARD: disable hover lift/scale to prevent first-card bounce */
+.discardPhase .cardBtn.playable .cardFace,
+.discardPhase .cardBtn.playable:hover .cardFace,
+.discardPhase .cardBtn.playable:active .cardFace {
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+/* DISCARD: only fade opacity, no transform transitions */
+.discardPhase .cardBtn.playable .cardFace {
+  transition: opacity 120ms ease-out !important;
+}

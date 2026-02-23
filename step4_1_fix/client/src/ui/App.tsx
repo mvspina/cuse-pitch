@@ -2358,7 +2358,7 @@ useEffect(() => {
             <button
               type="button"
               key={cardKey(c)}
-              className="cardBtn playable discardCardBtn"
+              className="cardBtn playable discardCardBtn discardNoBounce"
               title="Move to Discard"
               disabled={discardsLocked}
               onPointerDown={(e) => handleDiscardToggle(e, c)}
@@ -2383,7 +2383,7 @@ useEffect(() => {
             <button
               type="button"
               key={cardKey(c)}
-              className="cardBtn playable discardCardBtn"
+              className="cardBtn playable discardCardBtn discardNoBounce"
               title="Move back to Keep"
               disabled={discardsLocked}
               onPointerDown={(e) => handleDiscardToggle(e, c)}
