@@ -397,6 +397,12 @@ export default function App() {
   }, [state?.phase, state?.hands7, state?.dealtHands7, net.playerIndex])
 
   useEffect(() => {
+    if (state?.phase !== 'DISCARD') setDiscardSubmitting(false)
+    const pi = net.playerIndex
+    if (state?.phase === 'DISCARD' && pi !== null && state.discardDone?.[pi]) setDiscardSubmitting(false)
+  }, [state?.phase, state?.discardDone, net.playerIndex])
+
+  useEffect(() => {
     if (typeof localStorage === 'undefined') return
     if (localStorage.getItem('DEBUG_JOIN') === '1') {
       console.log('[JOINLINK] path=', window.location.pathname, 'code=', pendingInviteCode)
@@ -2266,7 +2272,10 @@ useEffect(() => {
           (cardKeyToIndex.get(cardKey(a)) ?? 999) - (cardKeyToIndex.get(cardKey(b)) ?? 999)
         const sortedKeepCards = [...discardHandLocal].sort(sortByDealtOrder)
         const sortedDiscardList = [...discardPileLocal].sort(sortByDealtOrder)
+        const pi = net.playerIndex!
+        const discardsLocked = !!state.discardDone?.[pi] || discardSubmitting
         const handleDiscardToggle = (e: React.PointerEvent, c: Card) => {
+          if (discardsLocked) return
           e.preventDefault()
           e.stopPropagation()
           const id = cardKey(c)
@@ -2306,6 +2315,7 @@ useEffect(() => {
               key={cardKey(c)}
               className="cardBtn playable discardCardBtn"
               title="Move to Discard"
+              disabled={discardsLocked}
               onPointerDown={(e) => handleDiscardToggle(e, c)}
             >
               <span className={`cardFace ${isRedSuit(c.suit) ? 'red' : 'black'}`}>
@@ -2330,6 +2340,7 @@ useEffect(() => {
               key={cardKey(c)}
               className="cardBtn playable discardCardBtn"
               title="Move back to Keep"
+              disabled={discardsLocked}
               onPointerDown={(e) => handleDiscardToggle(e, c)}
             >
               <span className={`cardFace ${isRedSuit(c.suit) ? 'red' : 'black'}`}>
