@@ -14,3 +14,5 @@ backups/
 
 client/.env*
 !client/.env.example
+client/.env*
+!client/.env.example
