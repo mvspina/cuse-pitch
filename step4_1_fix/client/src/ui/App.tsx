@@ -2244,6 +2244,13 @@ useEffect(() => {
         const discardCards = hand.filter(c => discardSelectedIds.has(cardKey(c)))
         const inServerNotInHand = serverDiscard.filter(c => !hand.some(h => cardKey(h) === cardKey(c)))
         const discardList = [...discardCards, ...inServerNotInHand]
+        const baseOrder = (state.dealtHands7?.[net.playerIndex ?? 0] ?? hand) as Card[]
+        const cardKeyToIndex = new Map(baseOrder.map((c, i) => [cardKey(c), i]))
+        const sortByDealtOrder = (a: Card, b: Card) =>
+          (cardKeyToIndex.get(cardKey(a)) ?? 999) - (cardKeyToIndex.get(cardKey(b)) ?? 999)
+        const sortedKeepCards = [...keepCards].sort(sortByDealtOrder)
+        const sortedDiscardCards = [...discardCards].sort(sortByDealtOrder)
+        const sortedDiscardList = [...sortedDiscardCards, ...inServerNotInHand]
         const handleDiscardToggle = (e: React.PointerEvent, c: Card) => {
           e.preventDefault()
           e.stopPropagation()
@@ -2264,7 +2271,7 @@ useEffect(() => {
         </div>
 
         <div className="tableBox discardPileGrid">
-          {keepCards.map(c => (
+          {sortedKeepCards.map(c => (
             <button
               type="button"
               key={cardKey(c)}
@@ -2279,7 +2286,7 @@ useEffect(() => {
               </span>
             </button>
           ))}
-          {!keepCards.length ? <div className="small">No cards in Keep.</div> : null}
+          {!sortedKeepCards.length ? <div className="small">No cards in Keep.</div> : null}
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginTop: 8 }}>
@@ -2288,7 +2295,7 @@ useEffect(() => {
         </div>
 
         <div className="tableBox discardPileGrid">
-          {discardList.map(c => (
+          {sortedDiscardList.map(c => (
             <button
               type="button"
               key={cardKey(c)}
@@ -2303,7 +2310,7 @@ useEffect(() => {
               </span>
             </button>
           ))}
-          {!discardList.length ? <div className="small">No discarded cards.</div> : null}
+          {!sortedDiscardList.length ? <div className="small">No discarded cards.</div> : null}
         </div>
       </div>
         )

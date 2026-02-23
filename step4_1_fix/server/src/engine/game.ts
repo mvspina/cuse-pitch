@@ -564,7 +564,7 @@ if (action.type === 'PLACE_BID') {
     const pi = action.playerIndex
     if (state.discardDone[pi]) return log(state, 'That player already confirmed discards.')
 
-    const hands7 = state.hands7.map(h => h.slice())
+    const hands7 = baseHands7.map(h => h.slice())
     const discards = state.discardPiles.map(h => h.slice())
 
     if (inHand(hands7[pi], action.card)) {
