@@ -202,6 +202,16 @@ function teamRosterLabel(state: GameState, teamId: string): string {
   return members.join(', ')
 }
 
+function trumpLabel(trump?: string | null): string {
+  if (!trump) return 'Not selected'
+  switch (trump) {
+    case 'H': return '♥ Hearts'
+    case 'D': return '♦ Diamonds'
+    case 'C': return '♣ Clubs'
+    case 'S': return '♠ Spades'
+    default: return String(trump)
+  }
+}
 
 function categoryName(c: string): string {
   if (c === 'HIGH') return 'High'
@@ -2227,12 +2237,16 @@ useEffect(() => {
 
               {state.phase === 'DISCARD' ? (
   <>
-    <div className="small">
-      Discard phase. Each player may discard any number of cards. Tap a card to move it between <strong>Keep</strong> and <strong>Discard</strong>.
-                    <br />
-                    <span className="small" style={{ opacity: 0.8 }}>Debug: keep {net.playerIndex !== null ? state.hands7[net.playerIndex].length : 0} | dealt {net.playerIndex !== null ? state.dealtHands7[net.playerIndex].length : 0}</span>.
-      <br />
-      Current confirmer: <strong>{playerName(state.currentPlayerIndex)}</strong>
+    <div className="phaseBanner">
+      <div className="phaseTitle">Discard</div>
+      <div className="phaseHint">
+        {net.playerIndex === null
+          ? 'Take a seat to discard.'
+          : 'Tap cards to move between Keep and Discard. After you confirm, cards lock.'}
+      </div>
+      {net.playerIndex !== null && (!!state.discardDone[net.playerIndex] || discardSubmitting) ? (
+        <span className="badge badgeLocked">Locked</span>
+      ) : null}
     </div>
 
     <hr />
@@ -2246,7 +2260,7 @@ useEffect(() => {
         }}
         disabled={net.playerIndex === null || state.discardDone[net.playerIndex] || discardSubmitting}
       >
-        Confirm Discards
+        {discardSubmitting ? 'Confirming…' : (net.playerIndex !== null && state.discardDone[net.playerIndex] ? 'Confirmed' : 'Confirm Discards')}
       </button>
 
       <button
@@ -2258,9 +2272,20 @@ useEffect(() => {
       </button>
     </div>
 
-    <p className="small" style={{ marginTop: 10 }}>
-      Confirmed: {state.discardDone.map((d, i) => `${playerName(i)}: ${d ? 'Yes' : 'No'}`).join(' | ')}
-    </p>
+    <div className="trumpBanner">
+      <span className="trumpLabel">Trump:</span>
+      <span className="trumpValue">{trumpLabel(state.trump)}</span>
+    </div>
+
+    <div className="discardStatusList">
+      <div className="small" style={{ marginBottom: 6 }}>Waiting on players</div>
+      {state.players.map((_, i) => (
+        <div key={i} className="discardStatusRow">
+          <span className="discardStatusName">{playerName(i)}</span>
+          <span className="discardStatusState">{state.discardDone[i] ? '✅ Confirmed' : '⏳ Waiting'}</span>
+        </div>
+      ))}
+    </div>
 
     <hr />
 
@@ -2304,7 +2329,7 @@ useEffect(() => {
         return (
       <div className="discardPhase small">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-          <div><strong>Keep</strong></div>
+          <div><strong>Keep</strong>{discardsLocked ? <span className="badge badgeLocked" style={{ marginLeft: 8 }}>Locked</span> : null}</div>
           <div className="small" style={{ opacity: 0.9 }}>Tap to discard</div>
         </div>
 
@@ -2329,7 +2354,7 @@ useEffect(() => {
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginTop: 8 }}>
-          <div><strong>Discard</strong></div>
+          <div><strong>Discard</strong>{discardsLocked ? <span className="badge badgeLocked" style={{ marginLeft: 8 }}>Locked</span> : null}</div>
           <div className="small" style={{ opacity: 0.9 }}>Tap to return</div>
         </div>
 

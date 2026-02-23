@@ -1133,3 +1133,76 @@ body{
   10%{ opacity: 0.95; }
   100%{ transform: translateY(120vh) rotate(720deg); opacity: 0; }
 }
+
+/* DISCARD phase polish */
+.phaseBanner {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(0,0,0,0.06);
+  border: 1px solid rgba(0,0,0,0.08);
+  margin-bottom: 12px;
+  position: relative;
+}
+.phaseTitle {
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+.phaseHint {
+  opacity: 0.88;
+  margin-top: 4px;
+  font-size: 0.9rem;
+}
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-top: 6px;
+}
+.badgeLocked {
+  background: rgba(0,0,0,0.12);
+  color: rgba(0,0,0,0.75);
+  border: 1px solid rgba(0,0,0,0.15);
+}
+.discardStatusList {
+  display: block;
+  margin-top: 10px;
+  margin-bottom: 4px;
+}
+.discardStatusRow {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+}
+.discardStatusRow:last-child {
+  border-bottom: none;
+}
+.discardStatusName {
+  font-weight: 600;
+}
+.discardStatusState {
+  opacity: 0.85;
+  font-size: 0.9rem;
+}
+
+.trumpBanner {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.06);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.trumpLabel {
+  opacity: 0.7;
+}
+.trumpValue {
+  font-size: 16px;
+}
