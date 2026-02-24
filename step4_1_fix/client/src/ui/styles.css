@@ -1310,3 +1310,59 @@ body{
   }
 }
 
+
+/* ===== Compact mobile seat tags ===== */
+@media (max-width: 640px){
+
+  /* shrink the container footprint */
+  .seatChip,
+  .seat{
+    max-width: none;
+    width: auto;
+  }
+
+  /* turn the card into a pill */
+  .seatInner{
+    padding: 3px 8px !important;
+    border-radius: 999px !important;
+    min-width: 0 !important;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(255,255,255,0.92);
+    box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+  }
+
+  /* shrink text */
+  .seatName{
+    font-size: 12px !important;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  .seatMeta{
+    display: none; /* hide seat # on mobile */
+  }
+
+  /* dealer becomes a tiny badge */
+  .dealerTag{
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 999px;
+    background: #ffd54a;
+    color: #000;
+    font-weight: 800;
+    margin-left: 4px;
+  }
+
+  /* your turn highlight stays visible but subtle */
+  .seatChipYourTurn .seatInner,
+  .seatActive .seatInner{
+    box-shadow: 0 0 0 2px rgba(59,130,246,0.55), 0 2px 6px rgba(0,0,0,0.25);
+  }
+
+  /* prevent tags from stealing center space */
+  .seat{
+    transform: translate(-50%, -50%) scale(0.9);
+  }
+}
