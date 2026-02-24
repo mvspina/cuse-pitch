@@ -1366,3 +1366,66 @@ body{
     transform: translate(-50%, -50%) scale(0.9);
   }
 }
+
+/* ===== Mobile compact seat chips (actual working fix) ===== */
+@media (max-width: 640px){
+
+  /* shrink container: outer chip/seat has no pill styling */
+  .seatChip,
+  .seat{
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    padding: 0;
+    min-width: 0;
+    max-width: none;
+    width: auto;
+  }
+
+  /* inner pill label */
+  .seatChipInner{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.92);
+    border: 1px solid rgba(0,0,0,0.14);
+    box-shadow: 0 8px 16px rgba(0,0,0,0.18);
+    white-space: nowrap;
+  }
+
+  /* name text inside pill */
+  .seatChipName{
+    font-size: 12px;
+    font-weight: 900;
+    line-height: 1;
+  }
+
+  /* meta text: small or hidden on mobile */
+  .seatChipMeta{
+    font-size: 10px;
+    opacity: 0.75;
+    margin-top: 0;
+    display: none;
+  }
+
+  /* dealer badge stays inline and small */
+  .dealerTag{
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    margin-left: 6px;
+  }
+
+  /* keep existing scale reduction to clear table center */
+  .seatChip{
+    transform: scale(0.82);
+    transform-origin: center;
+  }
+
+  /* give table more breathing room */
+  .tableFelt{
+    min-height: 560px;
+  }
+}
