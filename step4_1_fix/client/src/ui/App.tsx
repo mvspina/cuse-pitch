@@ -2554,6 +2554,47 @@ useEffect(() => {
               </div>
               </div>
             </div>
+
+            {state && (state.phase === 'SETUP' || state.phase === 'GAME_END') ? (
+              <div className="card" style={{ marginTop: 12 }}>
+                <h3>Seats</h3>
+                <div className="small">Choose where you want to sit.</div>
+
+                <div style={{ display:'flex', flexDirection:'column', gap:8, marginTop:10 }}>
+                  {state.players.map((p, i) => {
+                    const isMe = net.playerIndex === i
+                    const occupied = !!net.occupied?.[i]
+                    const hostOnly = i === 0 && !net.isHost
+
+                    return (
+                      <div key={i} className="tableBox" style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:10 }}>
+                        <div>
+                          <div style={{ fontWeight:900 }}>
+                            {playerName(i)} {isMe ? '(You)' : ''}
+                          </div>
+                          <div className="small">Seat {i+1}</div>
+                        </div>
+
+                        {isMe ? (
+                          <button className="btn danger" onClick={leaveSeat}>
+                            Leave Seat
+                          </button>
+                        ) : (
+                          <button
+                            className="btn primary"
+                            disabled={occupied || hostOnly}
+                            onClick={() => takeSeat(i)}
+                          >
+                            {hostOnly ? 'Host Only' : (occupied ? 'Taken' : 'Take Seat')}
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : null}
+
             <div style={{ minWidth: 0 }}>
               <div className="card" style={{ margin: 0 }}>
                 <ChatPanel
