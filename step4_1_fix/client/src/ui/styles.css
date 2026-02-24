@@ -1275,3 +1275,38 @@ body{
 .discardPhase .cardBtn.playable .cardFace {
   transition: opacity 120ms ease-out !important;
 }
+
+/* ===== SAFE mobile table spacing (CSS only) ===== */
+@media (max-width: 640px){
+
+  /* More vertical room so seats can spread */
+  .tableFelt{
+    height: 560px;
+    min-height: 560px;
+  }
+
+  /* Shrink tags slightly so they don't collide */
+  .seatChip, .seat{
+    max-width: 78%;
+  }
+
+  .seatInner{
+    padding: 6px 10px;
+  }
+  .seatName{ font-size: 13px; }
+  .seatMeta{ font-size: 11px; }
+
+  /* Push the four anchor containers outward, keeping center clear */
+  .seatTop{ top: 8px !important; }
+  .seatBottom{ bottom: 8px !important; }
+  .seatLeft{ left: 8px !important; }
+  .seatRight{ right: 8px !important; }
+
+  /* Make dealer badge smaller so it stops covering text */
+  .dealerTag{
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 999px;
+  }
+}
+
