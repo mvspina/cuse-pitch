@@ -1817,13 +1817,7 @@ useEffect(() => {
                 <button className="primary" onClick={() => setShowHistory(v => !v)}>
                   {showHistory ? 'Hide' : 'Show'} Trick History
                 </button>
-              
-                {state.phase === 'SETUP' && state.dealerIndex === net.playerIndex ? (
-                  <button className="btn" onClick={() => send({ type: 'START_HAND' })}>
-                    Dealer: Start Hand
-                  </button>
-                ) : null}
-</div>
+              </div>
 
               
 
@@ -1970,6 +1964,14 @@ useEffect(() => {
           </div>
         )
       })()}
+
+      {state.phase === 'SETUP' && state.dealerIndex === net.playerIndex ? (
+        <div className="centerCta">
+          <button className="btn" onClick={() => send({ type: 'START_HAND' })}>
+            Dealer: Start Hand
+          </button>
+        </div>
+      ) : null}
     </div>
   </div>
 </div>

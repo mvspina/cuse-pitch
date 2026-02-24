@@ -111,6 +111,7 @@ hr { border: none; border-top: 1px solid #eef0f6; margin: 12px 0; }
   background: radial-gradient(circle at 35% 30%, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.03) 40%, rgba(0,0,0,0.10) 100%);
   border: 1px solid rgba(0,0,0,0.12);
   overflow: hidden;
+  z-index: 1;
 }
 
 .seat {
@@ -134,6 +135,8 @@ hr { border: none; border-top: 1px solid #eef0f6; margin: 12px 0; }
   width: 300px;
   transform: translate(-50%, -50%);
   text-align: center;
+  pointer-events: none;
+  z-index: 2;
 }
 
 .cardFace {
@@ -607,6 +610,29 @@ body{
 .playCenterTitle{font-weight:800;letter-spacing:0.4px}
 .playCenterSub{font-size:12px;opacity:0.9}
 
+/* Mobile: center label less intrusive */
+@media (max-width: 640px){
+  .playCenterLabel{
+    opacity: 0.55;
+  }
+  .playCenterTitle{
+    font-size: 13px;
+    text-shadow: none;
+  }
+  .playCenterSub{
+    font-size: 11px;
+    text-shadow: none;
+  }
+}
+
+/* Center CTA button inside table */
+.centerCta{
+  margin-top: 10px;
+  display: flex;
+  justify-content: center;
+}
+
+
 /* v11.5 seat chips */
 .seatChip{
   position:absolute;
@@ -617,11 +643,37 @@ body{
   background: rgba(255,255,255,0.92);
   border: 1px solid rgba(0,0,0,0.10);
   box-shadow: 0 2px 10px rgba(0,0,0,0.10);
+  z-index: 5;
 }
-.seatChipName{ font-weight: 950; display: flex; align-items: center; gap: 8px; }
+.seatChipName{
+  font-weight: 950;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .youTag{ font-size: 11px; font-weight: 900; padding: 2px 8px; border-radius: 999px; background: rgba(31,94,255,0.12); border: 1px solid rgba(31,94,255,0.28); color: #1f5eff; }
 .seatChipMeta{ font-size: 12px; color: #444; margin-top: 2px; }
 .seatChipActive{ outline: 3px solid rgba(31,94,255,0.55); }
+
+/* Team tags for seat chips */
+.teamTag{
+  display:inline-flex;
+  align-items:center;
+  padding: 2px 6px;
+  border-radius:999px;
+  font-size:10px;
+  font-weight:800;
+  border:1px solid rgba(0,0,0,0.12);
+  opacity:0.9;
+}
+.teamA{
+  background: rgba(47,107,255,0.14);
+  color: rgba(20,60,160,0.95);
+}
+.teamB{
+  background: rgba(255,59,48,0.12);
+  color: rgba(160,30,25,0.95);
+}
 
 /* v11.5 drawer fix */
 .lobbyDrawer{
@@ -838,8 +890,10 @@ body{
 }
 
 .trickCards {
+  position: relative;
   transition: transform 420ms ease-in-out;
   will-change: transform;
+  z-index: 10;
 }
 
 .trickCardsSlide {
@@ -867,16 +921,18 @@ body{
 
 /* Mobile ergonomics */
 .cardBtn,
-.cardFace {
+.cardFace,
+.cardTile {
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
 }
 
-@media (max-width: 520px) {
+@media (max-width: 640px) {
   .container { padding: 12px; }
   .seatChip { min-width: 122px; max-width: 160px; padding: 6px 8px; border-radius: 12px; }
   .cardBtn { padding: 6px; }
+  .cardTile { min-width: 56px; min-height: 78px; }
   .cardFace { margin: 0; }
 }
 
@@ -1279,10 +1335,10 @@ body{
 /* ===== SAFE mobile table spacing (CSS only) ===== */
 @media (max-width: 640px){
 
-  /* More vertical room so seats can spread */
+  /* More vertical room so seats can spread, but not too tall */
   .tableFelt{
-    height: 560px;
-    min-height: 560px;
+    height: clamp(360px, 55vh, 440px);
+    min-height: unset;
   }
 
   /* Shrink tags slightly so they don't collide */
@@ -1412,10 +1468,16 @@ body{
 
   /* dealer badge stays inline and small */
   .dealerTag{
-    font-size: 9px;
+    font-size: 10px;
     padding: 2px 6px;
     border-radius: 999px;
     margin-left: 6px;
+    display: inline-flex;
+    align-items: center;
+    background: rgba(242,200,75,0.85);
+    border: 1px solid rgba(0,0,0,0.15);
+    color: rgba(0,0,0,0.85);
+    font-weight: 800;
   }
 
   /* keep existing scale reduction to clear table center */
@@ -1423,9 +1485,75 @@ body{
     transform: scale(0.82);
     transform-origin: center;
   }
+}
 
-  /* give table more breathing room */
-  .tableFelt{
-    min-height: 560px;
+@media (max-width: 640px){
+  .seatChipInner{
+    box-sizing: border-box;
+    max-width: min(92vw, 320px);
+  }
+
+  .seatChipName{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+
+  .seatChipName > .dealerTag,
+  .seatChipName > .teamTag,
+  .seatChipName > .youTag{
+    flex: 0 0 auto;
+  }
+
+  .dealerTag{
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    height: 16px;
+    line-height: 16px;
+    padding: 0 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 900;
+    margin-left: 4px;
+    transform: translateY(-0.5px);
+  }
+
+  .teamTag{
+    height: 16px;
+    line-height: 16px;
+    padding: 0 6px;
+    font-size: 10px;
+    font-weight: 900;
+    transform: translateY(-0.5px);
+  }
+
+  .youTag{
+    height: 16px;
+    line-height: 16px;
+    padding: 0 6px;
+    font-size: 10px;
+    font-weight: 900;
+    transform: translateY(-0.5px);
+  }
+}
+
+.centerCta{
+  margin-top: 10px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  pointer-events: auto;
+}
+
+@media (max-width: 640px){
+  .centerCta{
+    margin-top: 8px;
+  }
+  .centerCta .btn{
+    padding: 8px 10px;
+    font-size: 12px;
+    border-radius: 12px;
   }
 }
