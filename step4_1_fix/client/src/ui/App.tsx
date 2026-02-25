@@ -219,6 +219,14 @@ function seatStyle(index: number, count: number): React.CSSProperties {
   return pos[count]?.[index] ?? { left: 10, top: 10 }
 }
 
+function getHandScale(playerCount: number): number {
+  if (playerCount <= 2) return 1.0
+  if (playerCount === 3) return 0.92
+  if (playerCount === 4) return 0.82
+  if (playerCount === 5) return 0.74
+  return 0.66
+}
+
 type RoomStateSnapshot = {
   roomCode: string
   hostUserId: string | null
@@ -269,6 +277,27 @@ function pct(v: number): string {
   return `${Math.round(v * 1000) / 10}%`
 }
 
+function previewTeamForSeat(playerCount: number, seat: number): number {
+  if (playerCount === 2) return 0
+
+  if (playerCount === 3) return seat
+
+  if (playerCount === 4) {
+    // opposite seats are teammates
+    return seat % 2
+  }
+
+  if (playerCount === 6) {
+    // A B C A B C
+    return seat % 3
+  }
+
+  return 0
+}
+
+function teamClassForSeat(playerCount: number, seat: number): string {
+  return `teamTint${previewTeamForSeat(playerCount, seat)}`
+}
 
 export default function App() {
   const [settings, setSettings] = useState<GameSettings>({ targetScore: 11, playerCount: 4 })
@@ -371,6 +400,21 @@ export default function App() {
   const lastDiscardHandSigRef = useRef<string>('')
   const lastPhaseRef = useRef<string>('')
   const [discardSubmitting, setDiscardSubmitting] = useState(false)
+
+  const occupiedCount =
+    state && Array.isArray((state as any).seats)
+      ? (state as any).seats.filter((s: any) => s && (s.userId || s.ownerUserId || s.playerId)).length
+      : (state?.players?.length ?? 0)
+  const handScale = getHandScale(occupiedCount || 2)
+  const cardScale =
+    occupiedCount <= 2 ? 1 :
+    occupiedCount === 3 ? 0.92 :
+    occupiedCount === 4 ? 0.82 :
+    occupiedCount === 5 ? 0.74 :
+    0.68
+  useEffect(() => {
+    document.documentElement.style.setProperty('--card-scale', String(cardScale))
+  }, [cardScale])
 
   const apiBase = useMemo(() => {
     return window.location.origin
@@ -1817,13 +1861,7 @@ useEffect(() => {
                 <button className="primary" onClick={() => setShowHistory(v => !v)}>
                   {showHistory ? 'Hide' : 'Show'} Trick History
                 </button>
-              
-                {state.phase === 'SETUP' && state.dealerIndex === net.playerIndex ? (
-                  <button className="btn" onClick={() => send({ type: 'START_HAND' })}>
-                    Dealer: Start Hand
-                  </button>
-                ) : null}
-</div>
+              </div>
 
               
 
@@ -1837,20 +1875,20 @@ useEffect(() => {
           {state.trump ? <span className="metaPill">Trump: <span className={isRedSuit(state.trump) ? 'redSuit' : ''}>{suitSymbol[state.trump]}</span> {state.trump}</span> : null}
         </div>
 
-        <div className="metaPlayers">
+      <div className="metaPlayers">
           {state.players.map((p, idx) => {
-            if (!p.connected) return null
-            const isTurn = idx === state.currentPlayerIndex && state.phase === 'PLAY'
-            const isDealer = idx === state.dealerIndex
-            return (
-              <span key={p.id} className={`playerPill ${isTurn ? 'turn' : ''} ${isDealer ? 'dealer' : ''}`}>
-                {playerName(idx)}{isDealer ? ' D' : ''}
-              </span>
-            )
-          })}
-        </div>
+          if (!p.connected) return null
+          const isTurn = idx === state.currentPlayerIndex && state.phase === 'PLAY'
+          const isDealer = idx === state.dealerIndex
+          return (
+            <span key={p.id} className={`playerPill ${teamClassForSeat(state.players.length, idx)} ${isTurn ? 'turn' : ''} ${isDealer ? 'dealer' : ''}`}>
+              {playerName(idx)}{isDealer ? ' D' : ''}
+            </span>
+          )
+        })}
       </div>
-<div className={`tableWrap ${isMyTurn ? 'myTurn' : ''}`}>
+      </div>
+<div className={`tableWrap pc${occupiedCount || 0} ${isMyTurn ? 'myTurn' : ''}`}>
   <div className="tableFelt" aria-label="table">
     {state.phase === 'GAME_END' && winnerTeam ? (
       <div className="winOverlayV2" role="status" aria-live="polite">
@@ -1896,7 +1934,7 @@ useEffect(() => {
           {state.players.map((p, i) => (
             <div
               key={p.id}
-              className={`seatChip ${state.currentPlayerIndex === i ? 'seatChipActive' : ''} ${isMyTurn && net.playerIndex === i ? 'seatChipYourTurn' : ''} ${Date.now() < lingerUntil && lingerWinnerIndex === i ? 'seatChipWinner' : ''}`}
+              className={`seatChip ${teamClassForSeat(state.players.length, i)} ${state.currentPlayerIndex === i ? 'seatChipActive' : ''} ${isMyTurn && net.playerIndex === i ? 'seatChipYourTurn' : ''} ${Date.now() < lingerUntil && lingerWinnerIndex === i ? 'seatChipWinner' : ''}`}
               style={pos[i] ?? {}}
             >
               <div className="seatChipInner">
@@ -1970,6 +2008,14 @@ useEffect(() => {
           </div>
         )
       })()}
+
+      {state.phase === 'SETUP' && state.dealerIndex === net.playerIndex ? (
+        <div className="centerCta">
+          <button className="btn" onClick={() => send({ type: 'START_HAND' })}>
+            Dealer: Start Hand
+          </button>
+        </div>
+      ) : null}
     </div>
   </div>
 </div>
@@ -2416,49 +2462,53 @@ useEffect(() => {
     <hr />
 
     {net.playerIndex !== null ? (
-      <div className="small">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-          <div><strong>Your hand</strong></div>
-          <div className="small" style={{ opacity: 0.9 }}>
-            {(() => {
-              const lead = state.currentTrick && state.currentTrick.plays.length ? state.currentTrick.plays[0].card.suit : null
-              const mustLeadTrump = !!(state.trump && state.trickNumber === 1 && state.currentTrick && state.currentTrick.plays.length === 0 && state.currentTrick.leaderIndex === state.currentPlayerIndex)
-              const playable = legalPlays(state.hands6[net.playerIndex], lead, state.trump, mustLeadTrump)
-              if (mustLeadTrump) return `First lead must be Trump: ${suitLabel[state.trump!]} (${playable.length} playable)`
-              if (!lead) return 'Lead any card'
-              if (state.trump && lead !== state.trump) return `Play ${suitLabel[lead]} or Trump (${playable.length} playable)`
-              return `Must follow: ${suitLabel[lead]} (${playable.length} playable)`
-            })()}
+      <div className="handOverlay">
+        <div className="small">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+            <div><strong>Your hand</strong></div>
+            <div className="small" style={{ opacity: 0.9 }}>
+              {(() => {
+                const lead = state.currentTrick && state.currentTrick.plays.length ? state.currentTrick.plays[0].card.suit : null
+                const mustLeadTrump = !!(state.trump && state.trickNumber === 1 && state.currentTrick && state.currentTrick.plays.length === 0 && state.currentTrick.leaderIndex === state.currentPlayerIndex)
+                const playable = legalPlays(state.hands6[net.playerIndex], lead, state.trump, mustLeadTrump)
+                if (mustLeadTrump) return `First lead must be Trump: ${suitLabel[state.trump!]} (${playable.length} playable)`
+                if (!lead) return 'Lead any card'
+                if (state.trump && lead !== state.trump) return `Play ${suitLabel[lead]} or Trump (${playable.length} playable)`
+                return `Must follow: ${suitLabel[lead]} (${playable.length} playable)`
+              })()}
+            </div>
           </div>
-        </div>
 
-        <div className="tableBox">
-          {(() => {
-            const lead = state.currentTrick && state.currentTrick.plays.length ? state.currentTrick.plays[0].card.suit : null
-	            const mustLeadTrump = !!(state.trump && state.trickNumber === 1 && state.currentTrick && state.currentTrick.plays.length === 0 && state.currentTrick.leaderIndex === state.currentPlayerIndex)
-	            const playable = legalPlays(state.hands6[net.playerIndex], lead, state.trump, mustLeadTrump)
-            return state.hands6[net.playerIndex].map(c => {
-              const okSuit = playable.some(pc => sameCard(pc, c))
-              const isMyTurn = net.playerIndex === state.currentPlayerIndex
-              const ok = isMyTurn && okSuit
-              return (
-                <button
-                  key={cardKey(c)}
-                  className={`cardBtn ${ok ? 'playable' : 'blocked'}`}
-                  disabled={!ok}
-                  onClick={() => { sfx.play('tap'); send({ type: 'PLAY_CARD', card: c }) }}
-                  title={!isMyTurn ? 'Not your turn' : (okSuit ? 'Play card' : (mustLeadTrump ? 'First lead must be trump' : 'Must follow suit'))}
-                >
-                  <span className={`cardFace cardEnter ${isRedSuit(c.suit) ? 'red' : 'black'}`}>
-  <span className="corner tl"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
-  <span className="pip">{suitSymbol[c.suit]}</span>
-  <span className="corner br"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
+          <div className="handScaleWrap">
+            <div className="tableBox">
+              {(() => {
+                const lead = state.currentTrick && state.currentTrick.plays.length ? state.currentTrick.plays[0].card.suit : null
+	              const mustLeadTrump = !!(state.trump && state.trickNumber === 1 && state.currentTrick && state.currentTrick.plays.length === 0 && state.currentTrick.leaderIndex === state.currentPlayerIndex)
+	              const playable = legalPlays(state.hands6[net.playerIndex], lead, state.trump, mustLeadTrump)
+                return state.hands6[net.playerIndex].map(c => {
+                  const okSuit = playable.some(pc => sameCard(pc, c))
+                  const isMyTurn = net.playerIndex === state.currentPlayerIndex
+                  const ok = isMyTurn && okSuit
+                  return (
+                    <button
+                      key={cardKey(c)}
+                      className={`cardBtn ${ok ? 'playable' : 'blocked'}`}
+                      disabled={!ok}
+                      onClick={() => { sfx.play('tap'); send({ type: 'PLAY_CARD', card: c }) }}
+                      title={!isMyTurn ? 'Not your turn' : (okSuit ? 'Play card' : (mustLeadTrump ? 'First lead must be trump' : 'Must follow suit'))}
+                    >
+                      <span className={`cardFace cardEnter ${isRedSuit(c.suit) ? 'red' : 'black'}`}>
+	<span className="corner tl"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
+	<span className="pip">{suitSymbol[c.suit]}</span>
+	<span className="corner br"><span className="cardRank">{c.rank}</span><span className="cardSuit">{suitSymbol[c.suit]}</span></span>
 </span>
-                </button>
-              )
-            })
-          })()}
-          {!state.hands6[net.playerIndex].length ? <div className="small">No cards left.</div> : null}
+                    </button>
+                  )
+                })
+              })()}
+              {!state.hands6[net.playerIndex].length ? <div className="small">No cards left.</div> : null}
+            </div>
+          </div>
         </div>
       </div>
     ) : (
@@ -2552,6 +2602,56 @@ useEffect(() => {
               </div>
               </div>
             </div>
+
+            {state && (state.phase === 'SETUP' || state.phase === 'GAME_END') ? (
+              <div className="card" style={{ marginTop: 12 }}>
+                <h3>Seats</h3>
+                <div className="small">Choose where you want to sit.</div>
+
+                <div style={{ display:'flex', flexDirection:'column', gap:8, marginTop:10 }}>
+                  {state.players.map((p, i) => {
+                    const isMe = net.playerIndex === i
+                    const occupied = !!net.occupied?.[i]
+
+                    return (
+                      <div key={i} className="tableBox" style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:10 }}>
+                        <div>
+                          <div style={{ fontWeight:900 }}>
+                            {playerName(i)} {isMe ? '(You)' : ''}
+                          </div>
+                          <div className="small">
+                            Seat {i+1}
+                            {state.phase === 'SETUP' && (
+                              <span
+                                className={`teamPreview teamPreview${previewTeamForSeat(state.players.length, i)}`}
+                                style={{ marginLeft: 8 }}
+                              >
+                                Team {String.fromCharCode(65 + previewTeamForSeat(state.players.length, i))}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {isMe ? (
+                          <button className="btn danger" onClick={leaveSeat}>
+                            Leave Seat
+                          </button>
+                        ) : (
+                          <button
+                            className="btn primary"
+                            disabled={occupied}
+                            onClick={() => takeSeat(i)}
+                          >
+                            {occupied ? 'Taken' : 'Take Seat'}
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : null}
+
             <div style={{ minWidth: 0 }}>
               <div className="card" style={{ margin: 0 }}>
                 <ChatPanel

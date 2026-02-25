@@ -489,33 +489,44 @@ async function bootstrap(): Promise<void> {
     }
   }
   
+  function defaultSeatName(seat: number): string {
+    return seat === 0 ? 'Host' : `Player ${seat + 1}`
+  }
+
   function takeSeat(room: Room, token: string, seat: number): { ok: boolean, error?: string } {
     const pc = room.state.players.length
     if (seat < 0 || seat >= pc) return { ok: false, error: 'Invalid seat' }
     if (room.seatToken.has(seat)) return { ok: false, error: 'Seat already taken' }
-  
-    // If token already has a seat, free it
+
+    // If token already has a seat, free it and reset display name
     const currentSeat = room.tokenSeat.get(token)
     if (currentSeat !== undefined) {
       room.seatToken.delete(currentSeat)
       room.rematchReady.delete(currentSeat)
       room.tokenSeat.delete(token)
       room.seatUserId.delete(currentSeat)
+      room.state = reducer(room.state, { type: 'SET_NAME', playerIndex: currentSeat, name: defaultSeatName(currentSeat) })
     }
-  
+
     room.seatToken.set(seat, token)
     room.tokenSeat.set(token, seat)
     return { ok: true }
   }
-  
+
   function leaveSeat(room: Room, token: string): void {
     const seat = room.tokenSeat.get(token)
     if (seat === undefined) return
-    if (isHost(room, token)) return
     room.seatToken.delete(seat)
-        room.rematchReady.delete(seat)
+    room.rematchReady.delete(seat)
     room.tokenSeat.delete(token)
     room.seatUserId.delete(seat)
+    room.state = reducer(room.state, { type: 'SET_NAME', playerIndex: seat, name: defaultSeatName(seat) })
+  }
+
+  function clearUserIdFromAllSeats(room: Room, userId: string): void {
+    for (const [seat, existing] of room.seatUserId.entries()) {
+      if (existing === userId) room.seatUserId.delete(seat)
+    }
   }
 
   function assertRoomInvariants(room: Room, contextLabel: string): void {
@@ -1014,16 +1025,17 @@ async function bootstrap(): Promise<void> {
       const code = (payload.roomCode || '').toUpperCase().trim()
       const room = rooms.get(code)
       if (!room) { cb?.({ ok: false, error: 'Room not found' }); return }
-      if (room.state.phase !== 'SETUP') { cb?.({ ok: false, error: 'Seats can only be changed in Setup' }); return }
-  
-      if (payload.seat === 0 && !isHost(room, payload.token)) { cb?.({ ok: false, error: 'Seat 1 is host only' }); return }
-  
+      if (room.state.phase !== 'SETUP' && room.state.phase !== 'GAME_END') {
+        cb?.({ ok: false, error: 'Seats can only be changed in Setup or after game end' }); return
+      }
+
       const res = takeSeat(room, payload.token, payload.seat)
       if (!res.ok) { cb?.(res); return }
-  
+
       const authed = (socket.data as any).user as SessionUser | null
       const authedId = authed?.id != null ? String(authed.id) : undefined
       if (authedId) {
+        clearUserIdFromAllSeats(room, authedId)
         room.seatUserId.set(payload.seat, authedId)
         room.tokenUserId.set(payload.token, authedId)
         console.log('[ROOM] seat assignment room=%s seat=%s userId=%s', code, payload.seat, authedId)
@@ -1032,17 +1044,19 @@ async function bootstrap(): Promise<void> {
       if (chosenName.length > 0) {
         room.state = reducer(room.state, { type: 'SET_NAME', playerIndex: payload.seat, name: chosenName })
       }
-  
+
       emitRoomState(room)
       cb?.({ ok: true, playerIndex: payload.seat })
     })
-  
+
     socket.on('leaveSeat', (payload: { roomCode: string, token: string }, cb?: (resp: any) => void) => {
       const code = (payload.roomCode || '').toUpperCase().trim()
       const room = rooms.get(code)
       if (!room) { cb?.({ ok: false, error: 'Room not found' }); return }
-      if (room.state.phase !== 'SETUP') { cb?.({ ok: false, error: 'Seats can only be changed in Setup' }); return }
-  
+      if (room.state.phase !== 'SETUP' && room.state.phase !== 'GAME_END') {
+        cb?.({ ok: false, error: 'Seats can only be changed in Setup or after game end' }); return
+      }
+
       leaveSeat(room, payload.token)
       emitRoomState(room)
       cb?.({ ok: true, playerIndex: playerIndexForToken(room, payload.token) })

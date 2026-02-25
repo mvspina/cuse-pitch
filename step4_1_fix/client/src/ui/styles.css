@@ -2,8 +2,10 @@
   font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif;
   line-height: 1.35;
   color: #111;
-  --card-w: 96px;
-  --card-h: 140px;
+
+  --card-scale: 1;
+  --card-w: calc(62px * var(--card-scale));
+  --card-h: calc(86px * var(--card-scale));
 }
 
 body {
@@ -110,7 +112,9 @@ hr { border: none; border-top: 1px solid #eef0f6; margin: 12px 0; }
   border-radius: 22px;
   background: radial-gradient(circle at 35% 30%, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.03) 40%, rgba(0,0,0,0.10) 100%);
   border: 1px solid rgba(0,0,0,0.12);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: visible;
+  z-index: 1;
 }
 
 .seat {
@@ -134,6 +138,8 @@ hr { border: none; border-top: 1px solid #eef0f6; margin: 12px 0; }
   width: 300px;
   transform: translate(-50%, -50%);
   text-align: center;
+  pointer-events: none;
+  z-index: 2;
 }
 
 .cardFace {
@@ -516,8 +522,8 @@ body{
 }
 
 .cardFace{
-  width: 62px;
-  height: 86px;
+  width: var(--card-w);
+  height: var(--card-h);
   border-radius: 10px;
   background: linear-gradient(180deg, #ffffff, #f6f7fb);
   border: 1px solid rgba(0,0,0,0.18);
@@ -607,6 +613,29 @@ body{
 .playCenterTitle{font-weight:800;letter-spacing:0.4px}
 .playCenterSub{font-size:12px;opacity:0.9}
 
+/* Mobile: center label less intrusive */
+@media (max-width: 640px){
+  .playCenterLabel{
+    opacity: 0.55;
+  }
+  .playCenterTitle{
+    font-size: 13px;
+    text-shadow: none;
+  }
+  .playCenterSub{
+    font-size: 11px;
+    text-shadow: none;
+  }
+}
+
+/* Center CTA button inside table */
+.centerCta{
+  margin-top: 10px;
+  display: flex;
+  justify-content: center;
+}
+
+
 /* v11.5 seat chips */
 .seatChip{
   position:absolute;
@@ -617,11 +646,37 @@ body{
   background: rgba(255,255,255,0.92);
   border: 1px solid rgba(0,0,0,0.10);
   box-shadow: 0 2px 10px rgba(0,0,0,0.10);
+  z-index: 5;
 }
-.seatChipName{ font-weight: 950; display: flex; align-items: center; gap: 8px; }
+.seatChipName{
+  font-weight: 950;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .youTag{ font-size: 11px; font-weight: 900; padding: 2px 8px; border-radius: 999px; background: rgba(31,94,255,0.12); border: 1px solid rgba(31,94,255,0.28); color: #1f5eff; }
 .seatChipMeta{ font-size: 12px; color: #444; margin-top: 2px; }
 .seatChipActive{ outline: 3px solid rgba(31,94,255,0.55); }
+
+/* Team tags for seat chips */
+.teamTag{
+  display:inline-flex;
+  align-items:center;
+  padding: 2px 6px;
+  border-radius:999px;
+  font-size:10px;
+  font-weight:800;
+  border:1px solid rgba(0,0,0,0.12);
+  opacity:0.9;
+}
+.teamA{
+  background: rgba(47,107,255,0.14);
+  color: rgba(20,60,160,0.95);
+}
+.teamB{
+  background: rgba(255,59,48,0.12);
+  color: rgba(160,30,25,0.95);
+}
 
 /* v11.5 drawer fix */
 .lobbyDrawer{
@@ -838,8 +893,10 @@ body{
 }
 
 .trickCards {
+  position: relative;
   transition: transform 420ms ease-in-out;
   will-change: transform;
+  z-index: 10;
 }
 
 .trickCardsSlide {
@@ -867,16 +924,18 @@ body{
 
 /* Mobile ergonomics */
 .cardBtn,
-.cardFace {
+.cardFace,
+.cardTile {
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
 }
 
-@media (max-width: 520px) {
+@media (max-width: 640px) {
   .container { padding: 12px; }
   .seatChip { min-width: 122px; max-width: 160px; padding: 6px 8px; border-radius: 12px; }
   .cardBtn { padding: 6px; }
+  .cardTile { min-width: 56px; min-height: 78px; }
   .cardFace { margin: 0; }
 }
 
@@ -1274,4 +1333,360 @@ body{
 /* DISCARD: only fade opacity, no transform transitions */
 .discardPhase .cardBtn.playable .cardFace {
   transition: opacity 120ms ease-out !important;
+}
+
+/* ===== SAFE mobile table spacing (CSS only) ===== */
+@media (max-width: 640px){
+
+  /* More vertical room so seats can spread, but not too tall */
+  .tableFelt{
+    height: clamp(360px, 55vh, 440px);
+    min-height: unset;
+  }
+
+  /* Shrink tags slightly so they don't collide */
+  .seatChip, .seat{
+    max-width: 78%;
+  }
+
+  .seatInner{
+    padding: 6px 10px;
+  }
+  .seatName{ font-size: 13px; }
+  .seatMeta{ font-size: 11px; }
+
+  /* Push the four anchor containers outward, keeping center clear */
+  .seatTop{ top: 8px !important; }
+  .seatBottom{ bottom: 8px !important; }
+  .seatLeft{ left: 8px !important; }
+  .seatRight{ right: 8px !important; }
+
+  /* Make dealer badge smaller so it stops covering text */
+  .dealerTag{
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 999px;
+  }
+}
+
+
+/* ===== Compact mobile seat tags ===== */
+@media (max-width: 640px){
+
+  /* shrink the container footprint */
+  .seatChip,
+  .seat{
+    max-width: none;
+    width: auto;
+  }
+
+  /* turn the card into a pill */
+  .seatInner{
+    padding: 3px 8px !important;
+    border-radius: 999px !important;
+    min-width: 0 !important;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(255,255,255,0.92);
+    box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+  }
+
+  /* shrink text */
+  .seatName{
+    font-size: 12px !important;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  .seatMeta{
+    display: none; /* hide seat # on mobile */
+  }
+
+  /* dealer becomes a tiny badge */
+  .dealerTag{
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 999px;
+    background: #ffd54a;
+    color: #000;
+    font-weight: 800;
+    margin-left: 4px;
+  }
+
+  /* your turn highlight stays visible but subtle */
+  .seatChipYourTurn .seatInner,
+  .seatActive .seatInner{
+    box-shadow: 0 0 0 2px rgba(59,130,246,0.55), 0 2px 6px rgba(0,0,0,0.25);
+  }
+
+  /* prevent tags from stealing center space */
+  .seat{
+    transform: translate(-50%, -50%) scale(0.9);
+  }
+}
+
+/* ===== Mobile compact seat chips (actual working fix) ===== */
+@media (max-width: 640px){
+
+  /* shrink container: outer chip/seat has no pill styling */
+  .seatChip,
+  .seat{
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    padding: 0;
+    min-width: 0;
+    max-width: none;
+    width: auto;
+  }
+
+  /* inner pill label */
+  .seatChipInner{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.92);
+    border: 1px solid rgba(0,0,0,0.14);
+    box-shadow: 0 8px 16px rgba(0,0,0,0.18);
+    white-space: nowrap;
+  }
+
+  /* name text inside pill */
+  .seatChipName{
+    font-size: 12px;
+    font-weight: 900;
+    line-height: 1;
+  }
+
+  /* meta text: small or hidden on mobile */
+  .seatChipMeta{
+    font-size: 10px;
+    opacity: 0.75;
+    margin-top: 0;
+    display: none;
+  }
+
+  /* dealer badge stays inline and small */
+  .dealerTag{
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    margin-left: 6px;
+    display: inline-flex;
+    align-items: center;
+    background: rgba(242,200,75,0.85);
+    border: 1px solid rgba(0,0,0,0.15);
+    color: rgba(0,0,0,0.85);
+    font-weight: 800;
+  }
+
+  /* keep existing scale reduction to clear table center */
+  .seatChip{
+    transform: scale(0.82);
+    transform-origin: center;
+  }
+}
+
+@media (max-width: 640px){
+  .seatChipInner{
+    box-sizing: border-box;
+    max-width: min(92vw, 320px);
+  }
+
+  .seatChipName{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+
+  .seatChipName > .dealerTag,
+  .seatChipName > .teamTag,
+  .seatChipName > .youTag{
+    flex: 0 0 auto;
+  }
+
+  .dealerTag{
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    height: 16px;
+    line-height: 16px;
+    padding: 0 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 900;
+    margin-left: 4px;
+    transform: translateY(-0.5px);
+  }
+
+  .teamTag{
+    height: 16px;
+    line-height: 16px;
+    padding: 0 6px;
+    font-size: 10px;
+    font-weight: 900;
+    transform: translateY(-0.5px);
+  }
+
+  .youTag{
+    height: 16px;
+    line-height: 16px;
+    padding: 0 6px;
+    font-size: 10px;
+    font-weight: 900;
+    transform: translateY(-0.5px);
+  }
+}
+
+.centerCta{
+  margin-top: 10px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  pointer-events: auto;
+}
+
+@media (max-width: 640px){
+  .centerCta{
+    margin-top: 8px;
+  }
+  .centerCta .btn{
+    padding: 8px 10px;
+    font-size: 12px;
+    border-radius: 12px;
+  }
+}
+
+@media (max-width: 640px){
+  .teamTag{ letter-spacing: 0.2px; }
+}
+
+@media (max-width: 640px){
+  .seatChipName{
+    display: inline-block;
+    max-width: 8ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* Team preview chips (setup only) */
+.teamPreview{
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.teamPreview0{ background: rgba(60,120,255,.18); color:#2a57d6; }
+.teamPreview1{ background: rgba(255,80,80,.18); color:#c62828; }
+.teamPreview2{ background: rgba(255,180,40,.20); color:#b26a00; }
+
+@media (max-width:640px){
+  .teamPreview{
+    font-size:10px;
+    padding:1px 5px;
+  }
+}
+
+/* Subtle team tints */
+.teamTint0{ background: rgba(60,120,255,.10); }
+.teamTint1{ background: rgba(255,80,80,.10); }
+.teamTint2{ background: rgba(255,180,40,.10); }
+
+/* Keep active states readable */
+.seatChip.seatChipActive{ outline: 2px solid rgba(255,255,255,.35); }
+.playerPill.turn{ outline: 2px solid rgba(255,255,255,.35); }
+
+.handScaleWrap{
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  overflow: visible;
+}
+
+.handScaleWrap .tableBox{
+  display: inline-block;
+}
+
+@media (max-width: 640px){
+  /* Ensure the bottom of the page has room above iOS Safari toolbar */
+  body{
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 180px);
+  }
+}
+
+@media (max-width: 640px){
+  .tableBox{
+    padding-bottom: 18px;
+  }
+}
+
+@media (max-width: 640px){
+  .handOverlay{
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1200;
+    background: rgba(255,255,255,0.92);
+    border-top: 1px solid rgba(0,0,0,0.10);
+    box-shadow: 0 -12px 30px rgba(0,0,0,0.18);
+    padding: 10px 12px calc(env(safe-area-inset-bottom, 0px) + 14px);
+    backdrop-filter: blur(8px);
+  }
+
+  /* Keep the label row readable in the overlay */
+  .handOverlay .small{
+    color: #222;
+  }
+
+  /* Make sure the hand panel doesn't get clipped inside the overlay */
+  .handOverlay .tableBox{
+    max-width: 100%;
+    overflow: hidden;
+  }
+}
+
+/* 4-player spacing: keep center trick cards from colliding with seat pills */
+@media (max-width: 640px){
+  .pc4 .seatChip{
+    transform: scale(0.82) translateY(6px);
+    transform-origin: center;
+  }
+}
+
+@media (max-width: 640px){
+  /* 4-player mobile: lift played cards above seat pills without affecting X centering */
+  .tableWrap.pc4 .trickCards{
+    margin-top: -44px !important;
+  }
+}
+
+/* Layering: keep played cards above seat pills */
+.centerPot{
+  position: relative;
+  z-index: 60;
+}
+
+.trickCards{
+  position: relative;
+  z-index: 70;
+}
+
+.trickCards .cardFace{
+  position: relative;
+  z-index: 80;
+}
+
+/* Seat name pills below played cards */
+.playerPill{
+  position: relative;
+  z-index: 10;
 }
