@@ -523,6 +523,12 @@ async function bootstrap(): Promise<void> {
     room.state = reducer(room.state, { type: 'SET_NAME', playerIndex: seat, name: defaultSeatName(seat) })
   }
 
+  function clearUserIdFromAllSeats(room: Room, userId: string): void {
+    for (const [seat, existing] of room.seatUserId.entries()) {
+      if (existing === userId) room.seatUserId.delete(seat)
+    }
+  }
+
   function assertRoomInvariants(room: Room, contextLabel: string): void {
     if (!process.env.DEBUG_JOIN_DEAL) return
     const pc = room.state.players.length
@@ -1031,6 +1037,7 @@ async function bootstrap(): Promise<void> {
       const authed = (socket.data as any).user as SessionUser | null
       const authedId = authed?.id != null ? String(authed.id) : undefined
       if (authedId) {
+        clearUserIdFromAllSeats(room, authedId)
         room.seatUserId.set(payload.seat, authedId)
         room.tokenUserId.set(payload.token, authedId)
         console.log('[ROOM] seat assignment room=%s seat=%s userId=%s', code, payload.seat, authedId)
