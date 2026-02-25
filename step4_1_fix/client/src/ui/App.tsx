@@ -901,8 +901,18 @@ const prevPlaysLenRef = useRef<number>(0)
   function fetchLeaderboard() {
     try {
       if (!net.socket || !net.socket.connected) {
-        setLeaderboardError('Not connected')
-        setLeaderboardRows([])
+        // Socket not ready yet (common right after login). Treat as loading, not error.
+        setLeaderboardLoading(true)
+        setLeaderboardError(null)
+
+        // Allow the effect to try again
+        leaderboardFetchedRef.current = false
+
+        // Retry shortly
+        window.setTimeout(() => {
+          if (net.socket?.connected) fetchLeaderboard()
+        }, 300)
+
         return
       }
       setLeaderboardLoading(true)
@@ -933,10 +943,11 @@ const prevPlaysLenRef = useRef<number>(0)
 
   useEffect(() => {
     if (!authUser || roomReady || !net.socket?.connected) return
+    if (!net.connected) return
     if (leaderboardFetchedRef.current) return
     leaderboardFetchedRef.current = true
     fetchLeaderboard()
-  }, [authUser, roomReady, net.socket?.connected])
+  }, [authUser, roomReady, net.socket?.connected, net.connected])
 
   function showToast(msg: string) {
     setHomeToast(msg)
