@@ -1029,8 +1029,6 @@ async function bootstrap(): Promise<void> {
         cb?.({ ok: false, error: 'Seats can only be changed in Setup or after game end' }); return
       }
 
-      if (payload.seat === 0 && !isHost(room, payload.token)) { cb?.({ ok: false, error: 'Seat 1 is host only' }); return }
-
       const res = takeSeat(room, payload.token, payload.seat)
       if (!res.ok) { cb?.(res); return }
 

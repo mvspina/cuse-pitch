@@ -1557,3 +1557,45 @@ body{
     border-radius: 12px;
   }
 }
+
+@media (max-width: 640px){
+  .teamTag{ letter-spacing: 0.2px; }
+}
+
+@media (max-width: 640px){
+  .seatChipName{
+    display: inline-block;
+    max-width: 8ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* Team preview chips (setup only) */
+.teamPreview{
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.teamPreview0{ background: rgba(60,120,255,.18); color:#2a57d6; }
+.teamPreview1{ background: rgba(255,80,80,.18); color:#c62828; }
+.teamPreview2{ background: rgba(255,180,40,.20); color:#b26a00; }
+
+@media (max-width:640px){
+  .teamPreview{
+    font-size:10px;
+    padding:1px 5px;
+  }
+}
+
+/* Subtle team tints */
+.teamTint0{ background: rgba(60,120,255,.10); }
+.teamTint1{ background: rgba(255,80,80,.10); }
+.teamTint2{ background: rgba(255,180,40,.10); }
+
+/* Keep active states readable */
+.seatChip.seatChipActive{ outline: 2px solid rgba(255,255,255,.35); }
+.playerPill.turn{ outline: 2px solid rgba(255,255,255,.35); }

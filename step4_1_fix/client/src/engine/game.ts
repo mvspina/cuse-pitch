@@ -340,10 +340,17 @@ function applyHandScoring(state: GameState, result: HandResult): { teams: Team[]
   // STM success = immediate win
   if (result.stmSucceeded) return { teams, winnerTeamId: result.bidderTeamId }
 
-  // Normal win condition: first team to reach targetScore or higher
+  // Normal win condition: reach target AND be the unique leader.
+  // If tied at/above target, continue playing (tiebreaker hand).
   const target = state.settings.targetScore
-  const winner = teams.find(t => t.score >= target)?.id ?? null
-  return { teams, winnerTeamId: winner }
+
+  const topScore = Math.max(...teams.map(t => t.score))
+  if (topScore < target) return { teams, winnerTeamId: null }
+
+  const leaders = teams.filter(t => t.score === topScore)
+  if (leaders.length !== 1) return { teams, winnerTeamId: null }
+
+  return { teams, winnerTeamId: leaders[0].id }
 }
 
 export function reducer(state: GameState, action: Action): GameState {
@@ -565,6 +572,12 @@ export function reducer(state: GameState, action: Action): GameState {
 
     let out: GameState = { ...state, teams: applied.teams, dealerIndex: nextDealer, trump: null, bidHistory: [], phase: applied.winnerTeamId ? 'GAME_END' : 'SETUP', winnerTeamId: applied.winnerTeamId }
     out = log(out, 'Score applied. Dealer rotates left.')
+    const target = state.settings.targetScore
+    const topScore = Math.max(...applied.teams.map(t => t.score))
+    const leaders = applied.teams.filter(t => t.score === topScore)
+    if (topScore >= target && leaders.length !== 1) {
+      out = log(out, 'Tie at target. Playing a tiebreaker hand.')
+    }
     if (applied.winnerTeamId) out = log(out, `Winner: ${applied.teams.find(t => t.id === applied.winnerTeamId)?.name ?? applied.winnerTeamId}`)
     return out
   }

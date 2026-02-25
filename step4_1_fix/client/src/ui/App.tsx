@@ -269,6 +269,27 @@ function pct(v: number): string {
   return `${Math.round(v * 1000) / 10}%`
 }
 
+function previewTeamForSeat(playerCount: number, seat: number): number {
+  if (playerCount === 2) return 0
+
+  if (playerCount === 3) return seat
+
+  if (playerCount === 4) {
+    // opposite seats are teammates
+    return seat % 2
+  }
+
+  if (playerCount === 6) {
+    // A B C A B C
+    return seat % 3
+  }
+
+  return 0
+}
+
+function teamClassForSeat(playerCount: number, seat: number): string {
+  return `teamTint${previewTeamForSeat(playerCount, seat)}`
+}
 
 export default function App() {
   const [settings, setSettings] = useState<GameSettings>({ targetScore: 11, playerCount: 4 })
@@ -1837,7 +1858,7 @@ useEffect(() => {
             const isTurn = idx === state.currentPlayerIndex && state.phase === 'PLAY'
             const isDealer = idx === state.dealerIndex
             return (
-              <span key={p.id} className={`playerPill ${isTurn ? 'turn' : ''} ${isDealer ? 'dealer' : ''}`}>
+              <span key={p.id} className={`playerPill ${teamClassForSeat(state.players.length, idx)} ${isTurn ? 'turn' : ''} ${isDealer ? 'dealer' : ''}`}>
                 {playerName(idx)}{isDealer ? ' D' : ''}
               </span>
             )
@@ -1890,7 +1911,7 @@ useEffect(() => {
           {state.players.map((p, i) => (
             <div
               key={p.id}
-              className={`seatChip ${state.currentPlayerIndex === i ? 'seatChipActive' : ''} ${isMyTurn && net.playerIndex === i ? 'seatChipYourTurn' : ''} ${Date.now() < lingerUntil && lingerWinnerIndex === i ? 'seatChipWinner' : ''}`}
+              className={`seatChip ${teamClassForSeat(state.players.length, i)} ${state.currentPlayerIndex === i ? 'seatChipActive' : ''} ${isMyTurn && net.playerIndex === i ? 'seatChipYourTurn' : ''} ${Date.now() < lingerUntil && lingerWinnerIndex === i ? 'seatChipWinner' : ''}`}
               style={pos[i] ?? {}}
             >
               <div className="seatChipInner">
@@ -2564,7 +2585,6 @@ useEffect(() => {
                   {state.players.map((p, i) => {
                     const isMe = net.playerIndex === i
                     const occupied = !!net.occupied?.[i]
-                    const hostOnly = i === 0 && !net.isHost
 
                     return (
                       <div key={i} className="tableBox" style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:10 }}>
@@ -2572,7 +2592,17 @@ useEffect(() => {
                           <div style={{ fontWeight:900 }}>
                             {playerName(i)} {isMe ? '(You)' : ''}
                           </div>
-                          <div className="small">Seat {i+1}</div>
+                          <div className="small">
+                            Seat {i+1}
+                            {state.phase === 'SETUP' && (
+                              <span
+                                className={`teamPreview teamPreview${previewTeamForSeat(state.players.length, i)}`}
+                                style={{ marginLeft: 8 }}
+                              >
+                                Team {String.fromCharCode(65 + previewTeamForSeat(state.players.length, i))}
+                              </span>
+                            )}
+                          </div>
                         </div>
 
                         {isMe ? (
@@ -2582,10 +2612,10 @@ useEffect(() => {
                         ) : (
                           <button
                             className="btn primary"
-                            disabled={occupied || hostOnly}
+                            disabled={occupied}
                             onClick={() => takeSeat(i)}
                           >
-                            {hostOnly ? 'Host Only' : (occupied ? 'Taken' : 'Take Seat')}
+                            {occupied ? 'Taken' : 'Take Seat'}
                           </button>
                         )}
                       </div>
