@@ -1690,3 +1690,31 @@ body{
   position: relative;
   z-index: 10;
 }
+
+@media (max-width: 640px){
+
+  /* Mobile team tint for player pills (force win) */
+  .metaPlayers .playerPill.teamTint0,
+  .playerPill.teamTint0{
+    background: rgba(60,120,255,.18) !important;
+    border-color: rgba(60,120,255,.45) !important;
+  }
+
+  .metaPlayers .playerPill.teamTint1,
+  .playerPill.teamTint1{
+    background: rgba(255,80,80,.18) !important;
+    border-color: rgba(255,80,80,.45) !important;
+  }
+
+  .metaPlayers .playerPill.teamTint2,
+  .playerPill.teamTint2{
+    background: rgba(255,180,40,.20) !important;
+    border-color: rgba(255,180,40,.50) !important;
+  }
+
+  /* If mobile is showing seat chips instead of player pills, tint those too */
+  .seatChip.teamTint0 .seatChipInner{ background: rgba(60,120,255,.18) !important; border-color: rgba(60,120,255,.45) !important; }
+  .seatChip.teamTint1 .seatChipInner{ background: rgba(255,80,80,.18) !important; border-color: rgba(255,80,80,.45) !important; }
+  .seatChip.teamTint2 .seatChipInner{ background: rgba(255,180,40,.20) !important; border-color: rgba(255,180,40,.50) !important; }
+
+}
