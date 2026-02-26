@@ -60,3 +60,41 @@ This prevents cheating and ensures deterministic scoring across reconnects.
 ## Local Development
 
 Install dependencies:
+
+npm install
+cd client && npm install
+cd ../server && npm install
+
+
+Run dev servers:
+
+
+npm run dev
+
+
+---
+
+## Deployment
+
+The application is deployed using Fly.io.
+
+
+fly deploy
+
+
+Domain and SSL are automatically managed via Fly certificates.
+
+---
+
+## Security
+
+Passwords are never stored in plaintext.  
+Authentication uses secure hashed credentials and session cookies.
+
+See SECURITY.md for details.
+
+---
+
+## Author
+
+Michael Spina
