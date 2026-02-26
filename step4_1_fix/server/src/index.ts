@@ -71,6 +71,15 @@ const app = express()
 // Trust proxy first so secure cookies and X-Forwarded-* work behind Fly.io.
 app.set('trust proxy', 1)
 
+// Redirect www.cusepitch.com -> cusepitch.com (301), preserve path and query
+app.use((req, res, next) => {
+  const host = (req.headers['x-forwarded-host'] as string) || req.headers.host || ''
+  if (host.startsWith('www.cusepitch.com')) {
+    return res.redirect(301, 'https://cusepitch.com' + req.originalUrl)
+  }
+  next()
+})
+
 const ALLOWED_ORIGINS = new Set([
   'https://syracuse-pitch.fly.dev',
   'http://localhost:5173',

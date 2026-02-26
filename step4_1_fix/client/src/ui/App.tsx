@@ -363,6 +363,7 @@ export default function App() {
   const [inviteLink, setInviteLink] = useState<string | null>(null)
   const inviteShareSupported = useMemo(() => typeof (navigator as any)?.share === 'function', [])
   const [profileOpen, setProfileOpen] = useState(false)
+  const [rulesOpen, setRulesOpen] = useState(false)
   const [profileBusy, setProfileBusy] = useState(false)
   const [profileError, setProfileError] = useState<string | null>(null)
   const [profileStats, setProfileStats] = useState<ProfileStats | null>(null)
@@ -541,6 +542,10 @@ export default function App() {
           const pending = localStorage.getItem(PENDING_JOIN_ROOM)
           if (pending && pending.trim()) setPendingInviteCode(pending.trim().toUpperCase())
         } catch {}
+        if (net?.socket) {
+          try { net.socket.disconnect() } catch {}
+          try { net.socket.connect() } catch {}
+        }
       }
     } catch (e: any) {
       setAuthError(e?.message || 'Auth failed')
@@ -938,16 +943,36 @@ const prevPlaysLenRef = useRef<number>(0)
   }
 
   useEffect(() => {
-    if (roomReady || !authUser) leaderboardFetchedRef.current = false
-  }, [roomReady, authUser])
+    if (!authUser) {
+      leaderboardFetchedRef.current = false
+      setLeaderboardRows([])
+      setLeaderboardError(null)
+    }
+  }, [authUser])
 
   useEffect(() => {
-    if (!authUser || roomReady || !net.socket?.connected) return
-    if (!net.connected) return
+    if (!authUser) return
+    if (!net?.socket) return
+    if (!net.socket.connected) return
     if (leaderboardFetchedRef.current) return
+
     leaderboardFetchedRef.current = true
     fetchLeaderboard()
-  }, [authUser, roomReady, net.socket?.connected, net.connected])
+  }, [authUser, net?.socket?.connected])
+
+  useEffect(() => {
+    const s = net?.socket
+    if (!s) return
+
+    const onConnect = () => {
+      if (!authUser) return
+      leaderboardFetchedRef.current = false
+      fetchLeaderboard()
+    }
+
+    s.on('connect', onConnect)
+    return () => { s.off('connect', onConnect) }
+  }, [net?.socket, authUser])
 
   function showToast(msg: string) {
     setHomeToast(msg)
@@ -1619,7 +1644,7 @@ useEffect(() => {
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                 <div>
                   <div style={{ fontWeight: 900 }}>Account</div>
-                  <div className="small">
+                  <div className="small loginHint">
                     {authUser ? `Logged in as ${authUser.username}` : 'Login is required to create or join a game.'}
                   </div>
                 </div>
@@ -1627,6 +1652,7 @@ useEffect(() => {
                   {authUser ? (
                     <>
                       <button className="btn" onClick={openProfile} disabled={authBusy}>Profile</button>
+                      <button className="btn" onClick={() => setRulesOpen(true)}>Rules</button>
                       <button className="btn" onClick={doLogout} disabled={authBusy}>Logout</button>
                     </>
                   ) : (
@@ -1797,8 +1823,8 @@ useEffect(() => {
               <div className="col">
                 <LeaderboardPanel
                   rows={leaderboardRows.map(r => ({ name: r.name, games: r.games, wins: r.wins, losses: r.losses, winPct: r.winPct }))}
-                  loading={leaderboardLoading}
-                  error={leaderboardError}
+                  loading={leaderboardError === 'Not connected' && !net.socket?.connected ? true : leaderboardLoading}
+                  error={leaderboardError === 'Not connected' && !net.socket?.connected ? null : leaderboardError}
                   onRefresh={fetchLeaderboard}
                 />
               </div>
@@ -2747,6 +2773,78 @@ useEffect(() => {
                 {profileBusy ? 'Loading...' : 'Refresh'}
               </button>
               <button className="btn" onClick={() => setProfileOpen(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {rulesOpen ? (
+        <div className="modalBackdrop" onClick={() => setRulesOpen(false)}>
+          <div className="modalCard" onClick={(e) => e.stopPropagation()}>
+            <div className="modalTitle">Rules</div>
+
+            <div className="small" style={{ lineHeight: 1.45 }}>
+              <p style={{ marginTop: 6 }}>
+                Pitch is a trick taking card game where the goal is to score points as a team by winning tricks and capturing scoring cards.
+              </p>
+
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontWeight: 800, marginBottom: 6 }}>Basics</div>
+                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  <li><strong>Goal:</strong> First team to reach the target score wins.</li>
+                  <li><strong>Teams:</strong> In 4 players, it is 2v2 and opposite seats are teammates.</li>
+                  <li><strong>Dealer:</strong> The dealer rotates each hand.</li>
+                  <li><strong>Trump:</strong> Trump is set during bidding and shown at the top once chosen.</li>
+                </ul>
+              </div>
+
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontWeight: 800, marginBottom: 6 }}>Playing a trick</div>
+                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  <li><strong>Lead:</strong> The first card played sets the suit for the trick.</li>
+                  <li><strong>Follow suit:</strong> If you can follow the led suit, you must.</li>
+                  <li><strong>Cannot follow:</strong> If you cannot follow suit, you may play any card, including trump.</li>
+                </ul>
+              </div>
+
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontWeight: 800, marginBottom: 6 }}>Winning the trick</div>
+                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  <li><strong>No trump played:</strong> Highest card of the led suit wins.</li>
+                  <li><strong>Trump played:</strong> Highest trump wins.</li>
+                </ul>
+              </div>
+
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontWeight: 800, marginBottom: 6 }}>Scoring</div>
+
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>Hand Points (1 point each)</div>
+                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  <li><strong>High Trump</strong> – Highest trump captured</li>
+                  <li><strong>Low Trump</strong> – Lowest trump captured</li>
+                  <li><strong>Jack of Trump</strong></li>
+                  <li><strong>Game</strong> – Most total game points captured</li>
+                </ul>
+
+                <div style={{ fontWeight: 700, marginTop: 8, marginBottom: 4 }}>Game Points (used to determine Game)</div>
+                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  <li>Jack (any suit) = 1 point</li>
+                  <li>Queen (any suit) = 2 points</li>
+                  <li>King (any suit) = 3 points</li>
+                  <li>Ace (any suit) = 4 points</li>
+                  <li>10 (any suit) = 10 points</li>
+                </ul>
+              </div>
+
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontWeight: 800, marginBottom: 6 }}>Helpful tip</div>
+                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  <li>Use the "Must follow" hint above your hand to see what is legal right now.</li>
+                </ul>
+              </div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+              <button className="btn" onClick={() => setRulesOpen(false)}>Close</button>
             </div>
           </div>
         </div>
